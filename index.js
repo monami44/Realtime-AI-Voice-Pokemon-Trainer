@@ -55,7 +55,7 @@ const LOG_EVENT_TYPES = [
 
 // Initial User Messages
 const INITIAL_USER_MESSAGE = "Respond with exactly this greeting: 'Hey trainer! My name is Marcus, it's nice to meet you. What is your name?' Do not add any other content to your response.";
-const RETURNING_USER_MESSAGE_TEMPLATE = "Hey! This is a repeated call from user called {name} whose last conversation was about {lastTopic}. Please start the conversation by saying Nice to see you again, {name}! Do you want to talk more about {lastTopic} or you have another question?";
+const RETURNING_USER_MESSAGE_TEMPLATE = "Hey! This is a repeated call from a user whose last conversation was about {lastTopic}. Please start the conversation by saying Nice to see you again, {name}! Do you want to talk more about {lastTopic} or do you have another question?";
 
 // Initialize Supabase client
 const supabaseUrl = process.env.SUPABASE_URL;
@@ -517,7 +517,7 @@ async function handleIncomingCall(callSid, openAiWs) {
                 // Fallback to a generic greeting if message generation fails
                 initialUserMessage = RETURNING_USER_MESSAGE_TEMPLATE
                     .replace('{name}', userData.user_name || 'trainer')
-                    .replace('{lastTopic}', userData.last_question || 'Pokémon');
+                    .replace('{lastTopic}', userData.summary || 'Pokémon');
             }
         } else {
             // New user
@@ -546,11 +546,19 @@ async function handleIncomingCall(callSid, openAiWs) {
     }
 }
 
-// Function to generate initial user message for returning callers using GPT-4-mini
+// Function to generate initial user message for returning callers using GPT-4o-mini
 async function generateReturningUserMessage(userData) {
-    const { user_name, last_question } = userData;
+    const { user_name, summary } = userData;
 
-    const prompt = `Hey! This is a repeated call from user called ${user_name} whose last conversation was about ${last_question}. Please start the conversation by saying Nice to see you again, ${user_name}! Do you want to talk more about ${last_question} or you have another question?`;
+    const prompt = `Based on the following conversation summary and user name, generate a friendly greeting for a returning caller.
+
+Conversation Summary:
+${summary}
+
+User Name:
+${user_name}
+
+Greeting:`;
 
     try {
         const response = await fetch("https://api.openai.com/v1/chat/completions", {
@@ -562,7 +570,7 @@ async function generateReturningUserMessage(userData) {
             body: JSON.stringify({
                 model: "gpt-4o-mini",
                 messages: [
-                    { role: "system", content: "You are a helpful assistant that generates initial user messages for returning callers." },
+                    { role: "system", content: "You are a friendly and enthusiastic assistant that generates personalized greetings based on conversation summaries and user names." },
                     { role: "user", content: prompt }
                 ],
                 max_tokens: 100,
@@ -648,6 +656,54 @@ async function updateLastConversation(phoneNumber, question, answer) {
     }
 }
 
+// **New Function:** Extract user's name from the conversation summary
+async function extractUserNameFromSummary(summary) {
+    const prompt = `Extract the user's name from the following conversation summary. If the name is not mentioned, respond with "Name not found".
+
+Summary:
+${summary}
+
+Extracted Name:`;
+
+    try {
+        const response = await fetch("https://api.openai.com/v1/chat/completions", {
+            method: "POST",
+            headers: {
+                "Content-Type": "application/json",
+                Authorization: `Bearer ${OPENAI_API_KEY}`,
+            },
+            body: JSON.stringify({
+                model: "gpt-4o-mini",
+                messages: [
+                    { role: "system", content: "You are a helpful assistant that extracts specific information from text." },
+                    { role: "user", content: prompt }
+                ],
+                max_tokens: 10,
+                temperature: 0,
+            }),
+        });
+
+        if (!response.ok) {
+            console.error("Error extracting user name:", response.statusText);
+            return null;
+        }
+
+        const data = await response.json();
+        const extractedName = data.choices[0].message.content.trim();
+
+        // Handle case where name is not found
+        if (extractedName.toLowerCase() === "name not found") {
+            return null;
+        }
+
+        console.log("Extracted user name:", extractedName);
+        return extractedName;
+    } catch (error) {
+        console.error("Error in extractUserNameFromSummary:", error);
+        return null;
+    }
+}
+
 // Function to finalize the conversation and generate summary
 async function finalizeConversation(openAiWs) {
     if (!openAiWs.conversationId) {
@@ -658,7 +714,7 @@ async function finalizeConversation(openAiWs) {
     console.log("Finalizing conversation:", openAiWs.conversationId);
 
     try {
-        // Generate summary using GPT-4
+        // Generate summary using GPT-4o-mini
         const summaryResponse = await fetch("https://api.openai.com/v1/chat/completions", {
             method: "POST",
             headers: {
@@ -681,9 +737,17 @@ async function finalizeConversation(openAiWs) {
         }
 
         const summaryData = await summaryResponse.json();
-        const summary = summaryData.choices[0].message.content;
+        const summary = summaryData.choices[0].message.content.trim();
 
         console.log("Generated summary:", summary);
+
+        // **New Step:** Extract user's name from the summary
+        const extractedName = await extractUserNameFromSummary(summary);
+        if (extractedName) {
+            await updateUserName(openAiWs.phoneNumber, extractedName);
+        } else {
+            console.log("User name not found in summary.");
+        }
 
         // Update the database with the full dialogue and summary
         const { data, error } = await supabase
@@ -704,6 +768,9 @@ async function finalizeConversation(openAiWs) {
         console.error("Error finalizing conversation:", error);
     }
 }
+
+// **New Function:** Extract user's name from the conversation summary
+// (Already defined above)
 
 // Start the server
 fastifyInstance.listen({ port: PORT }, (err, address) => {
