@@ -32,7 +32,7 @@ const twilioClient = twilio(process.env.TWILIO_ACCOUNT_SID, process.env.TWILIO_A
 const PORT = process.env.PORT || 5050;
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
 const VOICE = process.env.VOICE || "shimmer";
-const SYSTEM_MESSAGE = `You are an AI assistant designed as a Pokémon Master. You have access to a vast knowledge base containing detailed information about all Pokémon, their abilities, types, evolutions, and related game mechanics.
+const SYSTEM_MESSAGE = `You are an AI assistant designed as a Pokémon Master. Your name is Marcus. You have access to a vast knowledge base containing detailed information about all Pokémon, their abilities, types, evolutions, and related game mechanics.
 
 Key Guidelines:
 - For ANY question related to Pokémon, you MUST check the knowledge base first.
@@ -53,9 +53,9 @@ const LOG_EVENT_TYPES = [
     "response.audio_transcript.done"
 ];
 
-// Greetings
-const INITIAL_GREETING = "Hey trainer! My name is Marcus, it's nice to meet you. What is your name?";
-const RETURNING_GREETING = "Welcome back, {name}! Last time we talked about {lastTopic}. Would you like to continue that discussion or do you have a new question?";
+// Initial User Messages
+const INITIAL_USER_MESSAGE = "Respond with exactly this greeting: 'Hey trainer! My name is Marcus, it's nice to meet you. What is your name?' Do not add any other content to your response.";
+const RETURNING_USER_MESSAGE_TEMPLATE = "Hey! This is a repeated call from user called {name} whose last conversation was about {lastTopic}. Please start the conversation by saying Nice to see you again, {name}! Do you want to talk more about {lastTopic} or you have another question?";
 
 // Initialize Supabase client
 const supabaseUrl = process.env.SUPABASE_URL;
@@ -191,7 +191,7 @@ function sendSessionUpdate(ws) {
     ws.send(JSON.stringify(sessionUpdate));
 }
 
-// Handle messages from OpenAI WebSocket
+// Function to handle messages from OpenAI WebSocket
 async function handleOpenAiMessage(openAiWs, data, connection, streamSid) {
     try {
         const response = JSON.parse(data);
@@ -283,6 +283,9 @@ async function handleOpenAiMessage(openAiWs, data, connection, streamSid) {
                             response: {
                                 modalities: ["text", "audio"],
                                 instructions: `Based on the knowledge base, provide a concise summary of the following information: ${answer}`,
+                                voice: VOICE,
+                                temperature: 0.7,
+                                max_output_tokens: 150,
                             },
                         }),
                     );
@@ -316,13 +319,12 @@ async function handleOpenAiMessage(openAiWs, data, connection, streamSid) {
         }
 
         if (response.type === "response.audio.delta" && response.delta) {
+            // **Important Fix Here: Directly send the delta without re-encoding**
             const audioDelta = {
                 event: "media",
                 streamSid: streamSid,
                 media: {
-                    payload: Buffer.from(response.delta, "base64").toString(
-                        "base64",
-                    ),
+                    payload: response.delta, // Send the delta as-is since it's already base64-encoded
                 },
             };
             connection.send(JSON.stringify(audioDelta));
@@ -506,23 +508,35 @@ async function handleIncomingCall(callSid, openAiWs) {
             console.error("Error fetching user data:", error);
         }
 
-        let greeting;
+        let initialUserMessage;
+
         if (userData) {
             // Returning user
-            greeting = RETURNING_GREETING
-                .replace('{name}', userData.user_name || 'trainer')
-                .replace('{lastTopic}', userData.last_question || 'Pokémon');
+            initialUserMessage = await generateReturningUserMessage(userData);
+            if (!initialUserMessage) {
+                // Fallback to a generic greeting if message generation fails
+                initialUserMessage = RETURNING_USER_MESSAGE_TEMPLATE
+                    .replace('{name}', userData.user_name || 'trainer')
+                    .replace('{lastTopic}', userData.last_question || 'Pokémon');
+            }
         } else {
             // New user
-            greeting = INITIAL_GREETING;
+            initialUserMessage = INITIAL_USER_MESSAGE;
             // Create a new user entry in the database
             const { data, error: insertError } = await supabase
                 .from('user_conversations')
                 .insert([{ phone_number: phoneNumber }]);
-            if (insertError) console.error("Error creating new user:", insertError);
+            if (insertError) {
+                if (insertError.code === '23505') { // Duplicate key
+                    console.warn(`User with phone number ${phoneNumber} already exists.`);
+                } else {
+                    console.error("Error creating new user:", insertError);
+                }
+            }
         }
 
-        sendInitialGreeting(openAiWs, greeting);
+        // Send the initial user message to OpenAI
+        sendUserMessage(openAiWs, initialUserMessage);
 
     } catch (error) {
         console.error("Error handling incoming call:", error);
@@ -532,38 +546,71 @@ async function handleIncomingCall(callSid, openAiWs) {
     }
 }
 
-// Function to send the initial greeting
-function sendInitialGreeting(openAiWs, greeting) {
-    if (openAiWs.sessionReady && greeting) { // Check if session is ready
-        console.log("Sending initial greeting:", greeting);
-        sendAIMessage(openAiWs, greeting);
-        openAiWs.fullDialogue = `AI: ${greeting}\n`;
-        openAiWs.awaitingName = greeting === INITIAL_GREETING;
-    } else {
-        console.log("Session not ready or greeting not set, delaying initial greeting");
+// Function to generate initial user message for returning callers using GPT-4-mini
+async function generateReturningUserMessage(userData) {
+    const { user_name, last_question } = userData;
+
+    const prompt = `Hey! This is a repeated call from user called ${user_name} whose last conversation was about ${last_question}. Please start the conversation by saying Nice to see you again, ${user_name}! Do you want to talk more about ${last_question} or you have another question?`;
+
+    try {
+        const response = await fetch("https://api.openai.com/v1/chat/completions", {
+            method: "POST",
+            headers: {
+                "Content-Type": "application/json",
+                Authorization: `Bearer ${OPENAI_API_KEY}`,
+            },
+            body: JSON.stringify({
+                model: "gpt-4o-mini",
+                messages: [
+                    { role: "system", content: "You are a helpful assistant that generates initial user messages for returning callers." },
+                    { role: "user", content: prompt }
+                ],
+                max_tokens: 100,
+                temperature: 0.7,
+            }),
+        });
+
+        if (!response.ok) {
+            console.error("Error generating returning user message:", response.statusText);
+            return null;
+        }
+
+        const data = await response.json();
+        const generatedMessage = data.choices[0].message.content.trim();
+        console.log("Generated returning user message:", generatedMessage);
+        return generatedMessage;
+    } catch (error) {
+        console.error("Error generating returning user message:", error);
+        return null;
     }
 }
 
-// Function to send AI messages
-function sendAIMessage(openAiWs, message) {
-    console.log("Sending AI message:", message);
+// Function to send the initial greeting as a user message
+function sendUserMessage(openAiWs, message) {
+    console.log("Sending user message:", message);
     openAiWs.send(JSON.stringify({
         type: "conversation.item.create",
         item: {
-            type: "assistant",
+            type: "user",
             content: message,
             modalities: ["text", "audio"],
         },
     }));
 
-    // Send a 'response.create' event to ensure audio generation
+    // Corrected response.create with instructions
     openAiWs.send(JSON.stringify({
         type: "response.create",
         response: {
             modalities: ["text", "audio"],
-            content: message,
+            instructions: "Please do exactly what the user asks for. Introduce yourself as Marcus, the Pokémon trainer. And please, ask for the user's name.",
+            voice: VOICE,
+            temperature: 0.7,
+            max_output_tokens: 150,
         },
     }));
+
+    // Optionally, append the user message to fullDialogue
+    openAiWs.fullDialogue += `User: ${message}\n`;
 }
 
 // Function to update user name in Supabase
