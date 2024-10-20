@@ -50,6 +50,7 @@ const LOG_EVENT_TYPES = [
     "input_audio_buffer.speech_stopped",
     "input_audio_buffer.speech_started",
     "session.created",
+    "response.audio_transcript.done"
 ];
 
 // Greetings
@@ -106,7 +107,7 @@ fastifyInstance.register(async (fastifyInstance) => {
 
         // Handle incoming messages from Twilio WebSocket
         connection.on("message", (message) =>
-            handleTwilioMessage(message, openAiWs, (sid) => { streamSid = sid; }, (cid) => { callSid = cid; })  // Updated to pass both setStreamSid and setCallSid
+            handleTwilioMessage(message, openAiWs, (sid) => { streamSid = sid; }, (cid) => { callSid = cid; })
         );
 
         // Clean up on connection close
@@ -141,6 +142,7 @@ function initializeOpenAiWebSocket() {
     ws.phoneNumber = null;
     ws.lastUserMessage = null;
     ws.sessionReady = false; // Make sessionReady a property of ws
+    ws.sendingFunctionCallOutput = false; // Initialize the flag
     return ws;
 }
 
@@ -287,8 +289,11 @@ async function handleOpenAiMessage(openAiWs, data, connection, streamSid) {
 
                     console.log("Knowledge base answer provided to OpenAI");
 
-                    // Append AI's knowledge base answer to fullDialogue
-                    openAiWs.fullDialogue += `AI: ${answer}\n`;
+                    // **Do NOT append function call outputs**
+                    // openAiWs.fullDialogue += `AI: ${answer}\n`;
+
+                    // Set flag to skip appending function call outputs
+                    openAiWs.sendingFunctionCallOutput = true;
                 } else {
                     console.log("No answer from knowledge base, AI will use its general knowledge.");
                     // Handle the case where the Supabase query failed
@@ -324,20 +329,38 @@ async function handleOpenAiMessage(openAiWs, data, connection, streamSid) {
         }
 
         if (response.type === "response.content.done") {
-            console.log("AI final response:", response.content);
-            openAiWs.fullDialogue += `AI: ${response.content}\n`;
+            if (!openAiWs.sendingFunctionCallOutput) {
+                console.log("AI final response:", response.content);
+                openAiWs.fullDialogue += `AI: ${response.content}\n`;
 
-            // Update last conversation regardless of whether it's a name or not
-            await updateLastConversation(openAiWs.phoneNumber, openAiWs.lastUserMessage, response.content);
+                // Update last conversation regardless of whether it's a name or not
+                await updateLastConversation(openAiWs.phoneNumber, openAiWs.lastUserMessage, response.content);
 
-            if (openAiWs.awaitingName) {
-                console.log("Updating user name:", response.content);
-                await updateUserName(openAiWs.phoneNumber, response.content);
-                openAiWs.awaitingName = false;
+                if (openAiWs.awaitingName) {
+                    console.log("Updating user name:", response.content);
+                    await updateUserName(openAiWs.phoneNumber, response.content);
+                    openAiWs.awaitingName = false;
+                }
+            } else {
+                console.log("Skipping appending AI function call output to fullDialogue");
+                openAiWs.sendingFunctionCallOutput = false; // Reset the flag
             }
         }
 
-        // **Handle Transcription Completion Event**
+        // **Handle AI's Transcribed Responses**
+        if (response.type === "response.audio_transcript.done") {
+            console.log("AI transcription completed:", response.transcript);
+            const aiTranscribedText = response.transcript;
+
+            // Append AI's transcribed message to fullDialogue
+            openAiWs.fullDialogue += `AI: ${aiTranscribedText}\n`;
+            console.log("AI message from transcription:", aiTranscribedText);
+
+            // Update last conversation
+            await updateLastConversation(openAiWs.phoneNumber, openAiWs.lastUserMessage, aiTranscribedText);
+        }
+
+        // **Handle Transcription Completion Event for User Messages**
         if (response.type === "conversation.item.input_audio_transcription.completed") {
             console.log("Transcription completed:", response.transcript);
             const transcribedText = response.transcript;
@@ -415,7 +438,7 @@ async function askSupabaseAssistant(question) {
 }
 
 // Handle messages from Twilio WebSocket
-function handleTwilioMessage(message, openAiWs, setStreamSid, setCallSid) { // Updated to accept setCallSid
+function handleTwilioMessage(message, openAiWs, setStreamSid, setCallSid) {
     try {
         const data = JSON.parse(message);
 
@@ -509,9 +532,9 @@ async function handleIncomingCall(callSid, openAiWs) {
     }
 }
 
-// New function to send the initial greeting
+// Function to send the initial greeting
 function sendInitialGreeting(openAiWs, greeting) {
-    if (openAiWs.sessionReady && greeting) { // Updated to check openAiWs.sessionReady
+    if (openAiWs.sessionReady && greeting) { // Check if session is ready
         console.log("Sending initial greeting:", greeting);
         sendAIMessage(openAiWs, greeting);
         openAiWs.fullDialogue = `AI: ${greeting}\n`;
@@ -521,7 +544,7 @@ function sendInitialGreeting(openAiWs, greeting) {
     }
 }
 
-// New function to send AI messages
+// Function to send AI messages
 function sendAIMessage(openAiWs, message) {
     console.log("Sending AI message:", message);
     openAiWs.send(JSON.stringify({
@@ -533,7 +556,7 @@ function sendAIMessage(openAiWs, message) {
         },
     }));
 
-    // Optionally, you can send a 'response.create' event to ensure audio generation
+    // Send a 'response.create' event to ensure audio generation
     openAiWs.send(JSON.stringify({
         type: "response.create",
         response: {
@@ -543,7 +566,7 @@ function sendAIMessage(openAiWs, message) {
     }));
 }
 
-// New function to update user name
+// Function to update user name in Supabase
 async function updateUserName(phoneNumber, name) {
     console.log(`Updating user name for ${phoneNumber}: ${name}`);
     const { data, error } = await supabase
@@ -557,7 +580,7 @@ async function updateUserName(phoneNumber, name) {
     }
 }
 
-// New function to update last conversation
+// Function to update last conversation in Supabase
 async function updateLastConversation(phoneNumber, question, answer) {
     console.log(`Updating last conversation for ${phoneNumber}`);
     console.log(`Question: ${question}`);
@@ -578,7 +601,7 @@ async function updateLastConversation(phoneNumber, question, answer) {
     }
 }
 
-// New function to finalize the conversation
+// Function to finalize the conversation and generate summary
 async function finalizeConversation(openAiWs) {
     if (!openAiWs.conversationId) {
         console.log("No conversation ID, skipping finalization");
