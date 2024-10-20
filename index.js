@@ -23,6 +23,7 @@ import WebSocket from "ws";
 import { createClient } from "@supabase/supabase-js";
 import twilio from 'twilio';
 import { v4 as uuidv4 } from 'uuid';
+import fetch from 'node-fetch'; // Ensure node-fetch is installed
 
 // Initialize Twilio client
 const twilioClient = twilio(process.env.TWILIO_ACCOUNT_SID, process.env.TWILIO_AUTH_TOKEN);
@@ -51,12 +52,9 @@ const LOG_EVENT_TYPES = [
     "session.created",
 ];
 
-// Add these new constants
+// Greetings
 const INITIAL_GREETING = "Hey trainer! My name is Marcus, it's nice to meet you. What is your name?";
 const RETURNING_GREETING = "Welcome back, {name}! Last time we talked about {lastTopic}. Would you like to continue that discussion or do you have a new question?";
-
-// Add this flag to track if the session is ready
-let sessionReady = false;
 
 // Initialize Supabase client
 const supabaseUrl = process.env.SUPABASE_URL;
@@ -93,7 +91,7 @@ fastifyInstance.register(async (fastifyInstance) => {
         console.log("Client connected");
         const openAiWs = initializeOpenAiWebSocket();
         let streamSid = null;
-        let callSid = null;  // Add this line
+        let callSid = null;  // To track the call SID
 
         // Send initial session update after connection is stable
         openAiWs.on("open", () => {
@@ -108,7 +106,7 @@ fastifyInstance.register(async (fastifyInstance) => {
 
         // Handle incoming messages from Twilio WebSocket
         connection.on("message", (message) =>
-            handleTwilioMessage(message, openAiWs, (sid) => (streamSid = sid), (cid) => (callSid = cid))  // Modify this line
+            handleTwilioMessage(message, openAiWs, (sid) => { streamSid = sid; }, (cid) => { callSid = cid; })  // Updated to pass both setStreamSid and setCallSid
         );
 
         // Clean up on connection close
@@ -142,6 +140,7 @@ function initializeOpenAiWebSocket() {
     ws.awaitingName = true;
     ws.phoneNumber = null;
     ws.lastUserMessage = null;
+    ws.sessionReady = false; // Make sessionReady a property of ws
     return ws;
 }
 
@@ -199,7 +198,7 @@ async function handleOpenAiMessage(openAiWs, data, connection, streamSid) {
 
         if (response.type === "session.updated") {
             console.log("Session updated successfully:", response);
-            sessionReady = true;
+            openAiWs.sessionReady = true; // Use the property on ws
             if (openAiWs.callSid) {
                 await handleIncomingCall(openAiWs.callSid, openAiWs);
             } else {
@@ -243,17 +242,20 @@ async function handleOpenAiMessage(openAiWs, data, connection, streamSid) {
                 console.log("AI is accessing knowledge base for question:", question);
 
                 // Inform the user that the assistant is checking the knowledge base
+                const checkingMessage = "Give me a second, I'm checking my knowledge.";
                 openAiWs.send(
                     JSON.stringify({
                         type: "conversation.item.create",
                         item: {
                             type: "assistant",
-                            content:
-                                "Give me a second, I'm checking my knowledge.",
+                            content: checkingMessage,
                             modalities: ["text", "audio"],
                         },
                     }),
                 );
+
+                // Append AI's intermediate message to fullDialogue
+                openAiWs.fullDialogue += `AI: ${checkingMessage}\n`;
 
                 // Call the Supabase assistant
                 const answer = await askSupabaseAssistant(question);
@@ -281,20 +283,26 @@ async function handleOpenAiMessage(openAiWs, data, connection, streamSid) {
                     );
 
                     console.log("Knowledge base answer provided to OpenAI");
+
+                    // Append AI's knowledge base answer to fullDialogue
+                    openAiWs.fullDialogue += `AI: ${answer}\n`;
                 } else {
                     console.log("No answer from knowledge base, AI will use its general knowledge.");
                     // Handle the case where the Supabase query failed
+                    const fallbackMessage = "I'm sorry, I couldn't access the knowledge base at this time.";
                     openAiWs.send(
                         JSON.stringify({
                             type: "conversation.item.create",
                             item: {
                                 type: "assistant",
-                                content:
-                                    "I'm sorry, I couldn't access the knowledge base at this time.",
+                                content: fallbackMessage,
                                 modalities: ["text", "audio"],
                             },
                         }),
                     );
+
+                    // Append fallback message to fullDialogue
+                    openAiWs.fullDialogue += `AI: ${fallbackMessage}\n`;
                 }
             }
         }
@@ -315,10 +323,10 @@ async function handleOpenAiMessage(openAiWs, data, connection, streamSid) {
         if (response.type === "response.content.done") {
             console.log("AI final response:", response.content);
             openAiWs.fullDialogue += `AI: ${response.content}\n`;
-            
+
             // Update last conversation regardless of whether it's a name or not
             await updateLastConversation(openAiWs.phoneNumber, openAiWs.lastUserMessage, response.content);
-            
+
             if (openAiWs.awaitingName) {
                 console.log("Updating user name:", response.content);
                 await updateUserName(openAiWs.phoneNumber, response.content);
@@ -339,6 +347,7 @@ async function handleOpenAiMessage(openAiWs, data, connection, streamSid) {
                 console.log("User message:", response.text);
             }
         }
+
     } catch (error) {
         console.error(
             "Error processing OpenAI message:",
@@ -348,6 +357,7 @@ async function handleOpenAiMessage(openAiWs, data, connection, streamSid) {
         );
     }
 }
+
 // Function to interact with Supabase for the knowledge base
 async function askSupabaseAssistant(question) {
     console.log("Querying knowledge base for:", question);
@@ -401,7 +411,7 @@ async function askSupabaseAssistant(question) {
 }
 
 // Handle messages from Twilio WebSocket
-function handleTwilioMessage(message, openAiWs, setStreamSid) {
+function handleTwilioMessage(message, openAiWs, setStreamSid, setCallSid) { // Updated to accept setCallSid
     try {
         const data = JSON.parse(message);
 
@@ -417,7 +427,8 @@ function handleTwilioMessage(message, openAiWs, setStreamSid) {
                 break;
             case "start":
                 setStreamSid(data.start.streamSid);
-                openAiWs.callSid = data.start.callSid;  // Set callSid here
+                setCallSid(data.start.callSid); // Set callSid here
+                openAiWs.callSid = data.start.callSid;  // Ensure openAiWs has callSid
                 console.log("Incoming stream started:", data.start.streamSid);
                 console.log("Call SID:", data.start.callSid);
                 break;
@@ -452,8 +463,10 @@ async function handleIncomingCall(callSid, openAiWs) {
         const phoneNumber = call.from;
 
         // Store the conversation ID and phone number
-        openAiWs.conversationId = uuidv4();
+        openAiWs.conversationId = uuidv4(); // Alternatively, use callSid directly
         openAiWs.phoneNumber = phoneNumber;
+
+        console.log(`Handling incoming call from ${phoneNumber} with Call SID: ${callSid}`);
 
         // Check if the user exists in the database
         const { data: userData, error } = await supabase
@@ -462,7 +475,7 @@ async function handleIncomingCall(callSid, openAiWs) {
             .eq('phone_number', phoneNumber)
             .single();
 
-        if (error && error.code !== 'PGRST116') {
+        if (error && error.code !== 'PGRST116') { // PGRST116: no rows found
             console.error("Error fetching user data:", error);
         }
 
@@ -476,10 +489,10 @@ async function handleIncomingCall(callSid, openAiWs) {
             // New user
             greeting = INITIAL_GREETING;
             // Create a new user entry in the database
-            const { data, error } = await supabase
+            const { data, error: insertError } = await supabase
                 .from('user_conversations')
                 .insert([{ phone_number: phoneNumber }]);
-            if (error) console.error("Error creating new user:", error);
+            if (insertError) console.error("Error creating new user:", insertError);
         }
 
         sendInitialGreeting(openAiWs, greeting);
@@ -494,7 +507,7 @@ async function handleIncomingCall(callSid, openAiWs) {
 
 // New function to send the initial greeting
 function sendInitialGreeting(openAiWs, greeting) {
-    if (sessionReady && greeting) {
+    if (openAiWs.sessionReady && greeting) { // Updated to check openAiWs.sessionReady
         console.log("Sending initial greeting:", greeting);
         sendAIMessage(openAiWs, greeting);
         openAiWs.fullDialogue = `AI: ${greeting}\n`;
@@ -503,6 +516,7 @@ function sendInitialGreeting(openAiWs, greeting) {
         console.log("Session not ready or greeting not set, delaying initial greeting");
     }
 }
+
 // New function to send AI messages
 function sendAIMessage(openAiWs, message) {
     console.log("Sending AI message:", message);
@@ -578,7 +592,7 @@ async function finalizeConversation(openAiWs) {
                 Authorization: `Bearer ${OPENAI_API_KEY}`,
             },
             body: JSON.stringify({
-                model: "gpt-4o-mini",
+                model: "gpt-4",
                 messages: [
                     { role: "system", content: "You are a helpful assistant that summarizes conversations." },
                     { role: "user", content: `Please summarize the following conversation:\n${openAiWs.fullDialogue}` }
@@ -586,6 +600,11 @@ async function finalizeConversation(openAiWs) {
                 max_tokens: 150
             }),
         });
+
+        if (!summaryResponse.ok) {
+            console.error("Error generating summary:", summaryResponse.statusText);
+            return;
+        }
 
         const summaryData = await summaryResponse.json();
         const summary = summaryData.choices[0].message.content;
@@ -597,7 +616,8 @@ async function finalizeConversation(openAiWs) {
             .from('user_conversations')
             .update({
                 full_dialogue: openAiWs.fullDialogue,
-                summary: summary
+                summary: summary,
+                last_conversation_timestamp: new Date().toISOString(),
             })
             .eq('phone_number', openAiWs.phoneNumber);
 
@@ -619,4 +639,3 @@ fastifyInstance.listen({ port: PORT }, (err, address) => {
     }
     console.log(`AI Assistant With a Brain Server is listening on ${address}`);
 });
-
