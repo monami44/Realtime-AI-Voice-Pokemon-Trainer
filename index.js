@@ -154,8 +154,8 @@ function sendSessionUpdate(ws) {
                 threshold: 0.3,
                 silence_duration_ms: 1000,
             },
-            input_audio_format: "g711_ulaw",
-            output_audio_format: "g711_ulaw",
+            input_audio_format: "g711_ulaw", // Ensure this is compatible
+            output_audio_format: "g711_ulaw", // Ensure this is compatible
             voice: VOICE,
             instructions: SYSTEM_MESSAGE,
             tools: [
@@ -180,6 +180,9 @@ function sendSessionUpdate(ws) {
             ],
             modalities: ["text", "audio"],
             temperature: 0.7,
+            input_audio_transcription: {
+                model: "whisper-1",
+            },
         },
     };
     console.log("Sending session update:", JSON.stringify(sessionUpdate));
@@ -334,18 +337,19 @@ async function handleOpenAiMessage(openAiWs, data, connection, streamSid) {
             }
         }
 
-        if (response.type === "input_audio_buffer.speech_started") {
-            console.log("User speaking");
-            openAiWs.awaitingName = openAiWs.awaitingName && openAiWs.fullDialogue.split('\n').length === 2;
-        }
+        // **Handle Transcription Completion Event**
+        if (response.type === "conversation.item.input_audio_transcription.completed") {
+            console.log("Transcription completed:", response.transcript);
+            const transcribedText = response.transcript;
 
-        if (response.type === "input_audio_buffer.committed") {
-            // This is where we get the user's message
-            if (response.text) {
-                openAiWs.lastUserMessage = response.text;
-                openAiWs.fullDialogue += `User: ${response.text}\n`;
-                console.log("User message:", response.text);
-            }
+            // Store the transcribed user message
+            openAiWs.lastUserMessage = transcribedText;
+            openAiWs.fullDialogue += `User: ${transcribedText}\n`;
+            console.log("User message from transcription:", transcribedText);
+
+            // Optionally, trigger AI response here if needed
+            // For example:
+            // await generateAIResponse(openAiWs, transcribedText);
         }
 
     } catch (error) {
@@ -450,7 +454,7 @@ function handleTwilioMessage(message, openAiWs, setStreamSid, setCallSid) { // U
     }
 }
 
-// New function to handle incoming calls
+// Function to handle incoming calls
 async function handleIncomingCall(callSid, openAiWs) {
     if (!callSid) {
         console.error("Call SID is undefined");
@@ -529,7 +533,7 @@ function sendAIMessage(openAiWs, message) {
         },
     }));
 
-    // Add this to force audio generation
+    // Optionally, you can send a 'response.create' event to ensure audio generation
     openAiWs.send(JSON.stringify({
         type: "response.create",
         response: {
@@ -592,7 +596,7 @@ async function finalizeConversation(openAiWs) {
                 Authorization: `Bearer ${OPENAI_API_KEY}`,
             },
             body: JSON.stringify({
-                model: "gpt-4",
+                model: "gpt-4o-mini",
                 messages: [
                     { role: "system", content: "You are a helpful assistant that summarizes conversations." },
                     { role: "user", content: `Please summarize the following conversation:\n${openAiWs.fullDialogue}` }
