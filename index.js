@@ -479,6 +479,10 @@ function handleTwilioMessage(message, openAiWs, setStreamSid, setCallSid) {
     }
 }
 
+// Constants for AI prompts
+const NEW_USER_PROMPT = "You are Marcus, a friendly Pokémon trainer AI assistant. Introduce yourself briefly and ask for the user's name.";
+const RETURNING_USER_PROMPT = "You are Marcus, a friendly Pokémon trainer AI assistant. In exactly 4 short sentences: 1) Greet the returning user {name}. 2) Say it's nice to see them again. 3) Mention their last conversation was about {lastTopic}. 4) Ask if they want to continue that topic or discuss something new.";
+
 // Function to handle incoming calls
 async function handleIncomingCall(callSid, openAiWs) {
     if (!callSid) {
@@ -492,7 +496,7 @@ async function handleIncomingCall(callSid, openAiWs) {
         const phoneNumber = call.from;
 
         // Store the conversation ID and phone number
-        openAiWs.conversationId = uuidv4(); // Alternatively, use callSid directly
+        openAiWs.conversationId = uuidv4();
         openAiWs.phoneNumber = phoneNumber;
 
         console.log(`Handling incoming call from ${phoneNumber} with Call SID: ${callSid}`);
@@ -508,132 +512,85 @@ async function handleIncomingCall(callSid, openAiWs) {
             console.error("Error fetching user data:", error);
         }
 
-        let initialUserMessage;
+        let prompt;
 
-        if (userData) {
-            // Returning user
-            initialUserMessage = await generateReturningUserMessage(userData);
-            if (!initialUserMessage) {
-                // Fallback to a generic greeting if message generation fails
-                initialUserMessage = RETURNING_USER_MESSAGE_TEMPLATE
-                    .replace('{name}', userData.user_name || 'trainer')
-                    .replace('{lastTopic}', userData.summary || 'Pokémon');
-            }
+        if (userData && userData.user_name) {
+            // Returning user with a name
+            prompt = RETURNING_USER_PROMPT
+                .replace('{name}', userData.user_name)
+                .replace('{lastTopic}', userData.summary || 'Pokémon');
+            sendUserMessage(openAiWs, prompt, true);
+        } else if (userData) {
+            // Returning user without a name (shouldn't happen, but just in case)
+            prompt = NEW_USER_PROMPT;
+            sendUserMessage(openAiWs, prompt);
         } else {
             // New user
-            initialUserMessage = INITIAL_USER_MESSAGE;
+            prompt = NEW_USER_PROMPT;
+            sendUserMessage(openAiWs, prompt);
             // Create a new user entry in the database
             const { data, error: insertError } = await supabase
                 .from('user_conversations')
                 .insert([{ phone_number: phoneNumber }]);
             if (insertError) {
-                if (insertError.code === '23505') { // Duplicate key
-                    console.warn(`User with phone number ${phoneNumber} already exists.`);
-                } else {
-                    console.error("Error creating new user:", insertError);
-                }
+                console.error("Error creating new user:", insertError);
             }
         }
 
-        // Send the initial user message to OpenAI
-        sendUserMessage(openAiWs, initialUserMessage);
-
     } catch (error) {
         console.error("Error handling incoming call:", error);
-        if (error.message.includes("Parameter 'sid' is not valid")) {
-            console.error("Invalid Call SID:", callSid);
-        }
-    }
-}
-
-// Function to generate initial user message for returning callers using GPT-4o-mini
-async function generateReturningUserMessage(userData) {
-    const { user_name, summary } = userData;
-
-    const prompt = `Based on the following conversation summary and user name, generate a friendly greeting for a returning caller.
-
-Conversation Summary:
-${summary}
-
-User Name:
-${user_name}
-
-Greeting:`;
-
-    try {
-        const response = await fetch("https://api.openai.com/v1/chat/completions", {
-            method: "POST",
-            headers: {
-                "Content-Type": "application/json",
-                Authorization: `Bearer ${OPENAI_API_KEY}`,
-            },
-            body: JSON.stringify({
-                model: "gpt-4o-mini",
-                messages: [
-                    { role: "system", content: "You are a friendly and enthusiastic assistant that generates personalized greetings based on conversation summaries and user names." },
-                    { role: "user", content: prompt }
-                ],
-                max_tokens: 100,
-                temperature: 0.7,
-            }),
-        });
-
-        if (!response.ok) {
-            console.error("Error generating returning user message:", response.statusText);
-            return null;
-        }
-
-        const data = await response.json();
-        const generatedMessage = data.choices[0].message.content.trim();
-        console.log("Generated returning user message:", generatedMessage);
-        return generatedMessage;
-    } catch (error) {
-        console.error("Error generating returning user message:", error);
-        return null;
     }
 }
 
 // Function to send the initial greeting as a user message
-function sendUserMessage(openAiWs, message) {
-    console.log("Sending user message:", message);
-    openAiWs.send(JSON.stringify({
-        type: "conversation.item.create",
-        item: {
-            type: "user",
-            content: message,
-            modalities: ["text", "audio"],
-        },
-    }));
-
-    // Corrected response.create with instructions
+function sendUserMessage(openAiWs, prompt, isReturningUser = false) {
+    console.log("Sending AI prompt:", prompt);
     openAiWs.send(JSON.stringify({
         type: "response.create",
         response: {
             modalities: ["text", "audio"],
-            instructions: "Please do exactly what the user asks for. Introduce yourself as Marcus, the Pokémon trainer. And please, ask for the user's name.",
+            instructions: prompt,
             voice: VOICE,
             temperature: 0.7,
-            max_output_tokens: 150,
+            max_output_tokens: 300,
         },
     }));
 
-    // Optionally, append the user message to fullDialogue
-    openAiWs.fullDialogue += `User: ${message}\n`;
+    // We don't append anything to fullDialogue here, as we're waiting for the AI's response
 }
 
-// Function to update user name in Supabase
+// Modify the updateUserName function to only update if the name doesn't exist
 async function updateUserName(phoneNumber, name) {
-    console.log(`Updating user name for ${phoneNumber}: ${name}`);
+    console.log(`Attempting to update user name for ${phoneNumber}: ${name}`);
     const { data, error } = await supabase
         .from('user_conversations')
-        .upsert({ phone_number: phoneNumber, user_name: name }, { onConflict: 'phone_number' });
+        .select('user_name')
+        .eq('phone_number', phoneNumber)
+        .single();
 
     if (error) {
-        console.error("Error updating user name:", error);
+        console.error("Error checking existing user name:", error);
+        return;
+    }
+
+    if (data && data.user_name) {
+        console.log(`User name already exists for ${phoneNumber}. Not updating.`);
+        return;
+    }
+
+    const { data: updateData, error: updateError } = await supabase
+        .from('user_conversations')
+        .update({ user_name: name })
+        .eq('phone_number', phoneNumber);
+
+    if (updateError) {
+        console.error("Error updating user name:", updateError);
     } else {
         console.log("User name updated successfully");
     }
 }
+
+// Remove the generateReturningUserMessage function as it's no longer needed
 
 // Function to update last conversation in Supabase
 async function updateLastConversation(phoneNumber, question, answer) {
