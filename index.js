@@ -948,30 +948,33 @@ async function bookTrainingSession(openAiWs, preferredTime, email) {
             return false;
         }
 
-        // Define event details
-        const startTime = new Date("2024-10-25T18:00:00");
-        const endTime = new Date(startTime);
-        endTime.setMinutes(startTime.getMinutes() + 30); // Add 30 minutes to the start time
+        const startTime = new Date(preferredTime);
+        const endTime = new Date(startTime.getTime() + 30 * 60 * 1000); // Add 30 minutes
 
+        // Define event details
         const event = {
-            summary: 'Pokémon Training Session',
-            description: 'A training session with Marcus, the Pokémon Master.',
+            summary: "Pokémon Training Session",
+            description: "A training session with Marcus, the Pokémon Master.",
             start: {
                 dateTime: startTime.toISOString(),
-                timeZone: 'America/Los_Angeles',
+                timeZone: 'America/Los_Angeles', // Adjust as needed
             },
             end: {
                 dateTime: endTime.toISOString(),
                 timeZone: 'America/Los_Angeles',
             },
-            attendees: [{ email: 'lymynky2@gmail.com' }],
+            attendees: [
+                { email: email },
+            ],
             conferenceData: {
                 createRequest: {
-                    requestId: 'unique-request-id',
-                    conferenceSolutionKey: { type: 'hangoutsMeet' },
+                    requestId: uuidv4(),
+                    conferenceSolutionKey: { type: "hangoutsMeet" },
                 },
             },
-            reminders: { useDefault: true },
+            reminders: {
+                useDefault: true,
+            },
         };
 
         const response = await calendar.events.insert({
@@ -1132,5 +1135,4 @@ fastifyInstance.listen({ port: PORT }, (err, address) => {
     }
     console.log(`AI Assistant With a Brain Server is listening on ${address}`);
 });
-
 
