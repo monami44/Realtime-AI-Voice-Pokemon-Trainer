@@ -68,7 +68,7 @@ Key Guidelines:
 - Keep your responses clear, informative, and in the style of an enthusiastic Pokémon expert.
 - Don't reveal any technical details about the knowledge base or how you're accessing the information.
 - Be friendly and excited about sharing Pokémon knowledge!
-- Additionally, if a user requests to schedule a training session, use the 'schedule_training_session' function to assist them in booking. Ensure a seamless transition between Pokémon-related assistance and booking functionalities.`;
+- Additionally, if a user requests to schedule a training session, use the 'schedule_training_session' function to assist them in booking. Ensure a seamless transition between Pokémon-related assistance and booking functionalities.**Before scheduling, spell the email address out loud and ask the user to confirm their email address for verification. Only proceed with scheduling after the user confirms that their email is correct.**`;
 
 const LOG_EVENT_TYPES = [
     "response.content.done",
@@ -1135,4 +1135,3 @@ fastifyInstance.listen({ port: PORT }, (err, address) => {
     }
     console.log(`AI Assistant With a Brain Server is listening on ${address}`);
 });
-
