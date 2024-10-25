@@ -1,4 +1,4 @@
-// server.js
+// index.js
 
 import dotenv from "dotenv";
 import path from 'path';
@@ -36,6 +36,20 @@ import fetch from 'node-fetch';
 import { google } from 'googleapis';
 import * as chrono from 'chrono-node';
 
+// Import database utilities
+import {
+    dbCreateOrGetUser,
+    dbUpdateUserName,
+    dbUpdateUserEmail,
+    dbCreateConversation,
+    dbUpdateConversation,
+    dbFinalizeConversation,
+    dbGetLastConversation,
+    dbCreateBooking,
+    dbUpdateBookingState,
+    extractEmailFromSummary
+} from './database-utils.js';
+
 // Initialize Twilio client
 const twilioClient = twilio(process.env.TWILIO_ACCOUNT_SID, process.env.TWILIO_AUTH_TOKEN);
 
@@ -68,7 +82,15 @@ Key Guidelines:
 - Keep your responses clear, informative, and in the style of an enthusiastic Pokémon expert.
 - Don't reveal any technical details about the knowledge base or how you're accessing the information.
 - Be friendly and excited about sharing Pokémon knowledge!
-- Additionally, if a user requests to schedule a training session, use the 'schedule_training_session' function to assist them in booking. Ensure a seamless transition between Pokémon-related assistance and booking functionalities.**Before scheduling, spell the email address out loud and ask the user to confirm their email address for verification. Only proceed with scheduling after the user confirms that their email is correct.**`;
+- For scheduling training sessions:
+  * When a user requests to schedule, first ask for their preferred time
+  * When collecting email:
+    - If they have a stored email, ask if they want to use it
+    - If they confirm stored email, proceed with booking
+    - If they decline stored email or don't have one, ask them to spell out their email address
+  * Always verify email accuracy by spelling it back to them before proceeding
+  * Only schedule after email confirmation
+- Make the conversation natural and engaging while following these guidelines.`;
 
 const LOG_EVENT_TYPES = [
     "response.content.done",
@@ -153,7 +175,75 @@ fastifyInstance.register(async (fastifyInstance) => {
     });
 });
 
-// Function to initialize OpenAI WebSocket
+// Retry configuration
+const RETRY_OPTIONS = {
+    maxRetries: 3,
+    baseDelay: 1000,
+    maxDelay: 5000
+};
+
+async function withRetry(operation, options = RETRY_OPTIONS) {
+    let lastError;
+    for (let i = 0; i < options.maxRetries; i++) {
+        try {
+            return await operation();
+        } catch (error) {
+            lastError = error;
+            console.error(`Operation failed (attempt ${i + 1}/${options.maxRetries}):`, error);
+            
+            if (i < options.maxRetries - 1) {
+                const delay = Math.min(
+                    options.baseDelay * Math.pow(2, i),
+                    options.maxDelay
+                );
+                await new Promise(resolve => setTimeout(resolve, delay));
+            }
+        }
+    }
+    throw lastError;
+}
+
+// Retry-enabled versions of database functions
+const createOrGetUserWithRetry = (phoneNumber) => withRetry(() => dbCreateOrGetUser(phoneNumber));
+const updateUserNameWithRetry = (phoneNumber, name) => withRetry(() => dbUpdateUserName(phoneNumber, name));
+const updateUserEmailWithRetry = (phoneNumber, email) => withRetry(() => dbUpdateUserEmail(phoneNumber, email));
+const createConversationWithRetry = (phoneNumber) => withRetry(() => dbCreateConversation(phoneNumber));
+const updateConversationWithRetry = (conversationId, updates) => withRetry(() => dbUpdateConversation(conversationId, updates));
+const finalizeConversationInDbWithRetry = (conversationId, fullDialogue, summary) => withRetry(() => dbFinalizeConversation(conversationId, fullDialogue, summary));
+const getLastConversationWithRetry = (phoneNumber) => withRetry(() => dbGetLastConversation(phoneNumber));
+const createBookingWithRetry = (phoneNumber, conversationId, eventId, time, email) => withRetry(() => dbCreateBooking(phoneNumber, conversationId, eventId, time, email));
+const updateBookingStateWithRetry = (bookingId, state) => withRetry(() => dbUpdateBookingState(bookingId, state));
+
+// Add error handling for WebSocket connections
+function setupWebSocketErrorHandling(ws) {
+    ws.on('error', (error) => {
+        console.error('WebSocket error:', error);
+        try {
+            if (ws.conversationId) {
+                updateConversation(ws.conversationId, {
+                    end_timestamp: new Date().toISOString(),
+                    error_log: JSON.stringify(error)
+                }).catch(console.error);
+            }
+        } catch (e) {
+            console.error('Error handling WebSocket error:', e);
+        }
+    });
+
+    ws.on('close', async () => {
+        try {
+            if (ws.conversationId) {
+                await finalizeConversation(ws.conversationId, ws.fullDialogue, "Conversation ended unexpectedly");
+            }
+        } catch (e) {
+            console.error('Error handling WebSocket close:', e);
+        }
+    });
+
+    return ws;
+}
+
+// Modified openAiWs initialization to include error handling
 function initializeOpenAiWebSocket() {
     const ws = new WebSocket(
         process.env.AZURE_OPENAI_REALTIME_ENDPOINT,
@@ -163,16 +253,38 @@ function initializeOpenAiWebSocket() {
             },
         },
     );
+    
+    // Add base properties
     ws.fullDialogue = "";
     ws.awaitingName = true;
     ws.phoneNumber = null;
     ws.lastUserMessage = null;
-    ws.sessionReady = false; // Make sessionReady a property of ws
-    ws.sendingFunctionCallOutput = false; // Initialize the flag
-    ws.bookingState = 'idle'; // Initialize booking_state
-    ws.preferred_time = null; // Initialize preferred_time
-    ws.email = null; // Initialize email
-    return ws;
+    ws.conversationId = null;
+    ws.sessionReady = false;
+    ws.sendingFunctionCallOutput = false;
+    ws.bookingState = 'idle';
+    ws.preferred_time = null;
+    ws.email = null;
+
+    // Setup error handling
+    return setupWebSocketErrorHandling(ws);
+}
+
+// Modified updateLastConversation function to use retry mechanism
+async function updateLastConversation(ws, phoneNumber, question, answer) {
+    if (!ws.conversationId) {
+        console.error("No conversation ID available");
+        return;
+    }
+
+    console.log(`Updating conversation for ${phoneNumber}`);
+    console.log(`Question: ${question}`);
+    console.log(`Answer: ${answer}`);
+    
+    await updateConversationWithRetry(ws.conversationId, {
+        last_question: question || 'No question',
+        last_answer: answer
+    });
 }
 
 // Function to send session update to OpenAI WebSocket
@@ -425,7 +537,7 @@ async function handleOpenAiMessage(openAiWs, data, connection, streamSid) {
                 openAiWs.fullDialogue += `AI: ${response.content}\n`;
 
                 // Update last conversation
-                await updateLastConversation(openAiWs.phoneNumber, openAiWs.lastUserMessage, response.content);
+                await updateLastConversation(openAiWs, openAiWs.phoneNumber, openAiWs.lastUserMessage, response.content);
 
                 // Handle booking flow based on booking_state
                 const bookingState = openAiWs.bookingState;
@@ -475,7 +587,7 @@ async function handleOpenAiMessage(openAiWs, data, connection, streamSid) {
             console.log("AI message from transcription:", aiTranscribedText);
 
             // Update last conversation
-            await updateLastConversation(openAiWs.phoneNumber, openAiWs.lastUserMessage, aiTranscribedText);
+            await updateLastConversation(openAiWs, openAiWs.phoneNumber, openAiWs.lastUserMessage, aiTranscribedText);
         }
 
         // **Handle Transcription Completion Event for User Messages**
@@ -534,7 +646,13 @@ async function handleOpenAiMessage(openAiWs, data, connection, streamSid) {
                 const confirmation = transcribedText.trim().toLowerCase();
                 const email = openAiWs.email;
                 await handleEmailConfirmation(openAiWs, confirmation, email);
+            } else if (bookingState === 'confirm_existing_email') {
+                const confirmation = transcribedText.trim().toLowerCase();
+                await handleExistingEmailConfirmation(openAiWs, confirmation);
             }
+
+            // Update last conversation
+            await updateLastConversation(openAiWs, openAiWs.phoneNumber, openAiWs.lastUserMessage, null);
         }
 
     } catch (error) {
@@ -616,8 +734,8 @@ function handleTwilioMessage(message, openAiWs, setStreamSid, setCallSid) {
                 break;
             case "start":
                 setStreamSid(data.start.streamSid);
-                setCallSid(data.start.callSid); // Set callSid here
-                openAiWs.callSid = data.start.callSid;  // Ensure openAiWs has callSid
+                setCallSid(data.start.callSid);
+                openAiWs.callSid = data.start.callSid;
                 console.log("Incoming stream started:", data.start.streamSid);
                 console.log("Call SID:", data.start.callSid);
                 break;
@@ -630,12 +748,7 @@ function handleTwilioMessage(message, openAiWs, setStreamSid, setCallSid) {
                 break;
         }
     } catch (error) {
-        console.error(
-            "Error parsing Twilio message:",
-            error,
-            "Message:",
-            message,
-        );
+        console.error("Error parsing Twilio message:", error);
     }
 }
 
@@ -654,46 +767,38 @@ async function handleIncomingCall(callSid, openAiWs) {
         const call = await twilioClient.calls(callSid).fetch();
         const phoneNumber = call.from;
 
-        // Store the conversation ID and phone number
-        openAiWs.conversationId = uuidv4();
+        // Store the phone number
         openAiWs.phoneNumber = phoneNumber;
+
+        // Create or get user
+        const user = await createOrGetUserWithRetry(phoneNumber);
+        if (!user) {
+            throw new Error("Failed to create or get user");
+        }
+
+        // Create new conversation
+        const conversation = await createConversationWithRetry(phoneNumber);
+        if (!conversation) {
+            throw new Error("Failed to create conversation");
+        }
+        openAiWs.conversationId = conversation.conversation_id;
 
         console.log(`Handling incoming call from ${phoneNumber} with Call SID: ${callSid}`);
 
-        // Check if the user exists in the database
-        const { data: userData, error } = await supabase
-            .from('user_conversations')
-            .select('*')
-            .eq('phone_number', phoneNumber)
-            .single();
-
-        if (error && error.code !== 'PGRST116') { // PGRST116: no rows found
-            console.error("Error fetching user data:", error);
-        }
+        // Get last conversation for context
+        const lastConversation = await getLastConversationWithRetry(phoneNumber);
 
         let prompt;
-
-        if (userData && userData.user_name) {
+        if (user.name) {
             // Returning user with a name
             prompt = RETURNING_USER_MESSAGE_TEMPLATE
-                .replace('{name}', userData.user_name)
-                .replace('{lastTopic}', userData.summary || 'Pokémon');
+                .replace('{name}', user.name)
+                .replace('{lastTopic}', lastConversation?.summary || 'Pokémon');
             sendUserMessage(openAiWs, prompt, true);
-        } else if (userData) {
-            // Returning user without a name (shouldn't happen, but just in case)
-            prompt = NEW_USER_PROMPT;
-            sendUserMessage(openAiWs, prompt);
         } else {
             // New user
             prompt = NEW_USER_PROMPT;
             sendUserMessage(openAiWs, prompt);
-            // Create a new user entry in the database
-            const { data, error: insertError } = await supabase
-                .from('user_conversations')
-                .insert([{ phone_number: phoneNumber }]);
-            if (insertError) {
-                console.error("Error creating new user:", insertError);
-            }
         }
 
     } catch (error) {
@@ -749,26 +854,6 @@ async function updateUserName(phoneNumber, name) {
     }
 }
 
-// Function to update last conversation in Supabase
-async function updateLastConversation(phoneNumber, question, answer) {
-    console.log(`Updating last conversation for ${phoneNumber}`);
-    console.log(`Question: ${question}`);
-    console.log(`Answer: ${answer}`);
-    const { data, error } = await supabase
-        .from('user_conversations')
-        .upsert({
-            phone_number: phoneNumber,
-            last_question: question || 'No question',
-            last_answer: answer,
-            last_conversation_timestamp: new Date().toISOString(),
-        }, { onConflict: 'phone_number' });
-
-    if (error) {
-        console.error("Error updating last conversation:", error);
-    } else {
-        console.log("Last conversation updated successfully");
-    }
-}
 
 // **Helper Functions for Booking Flow**
 
@@ -833,7 +918,7 @@ async function askForSuitableTime(openAiWs) {
         },
     }));
     openAiWs.bookingState = 'awaiting_time';
-    await updateBookingState(openAiWs.phoneNumber, 'awaiting_time');
+    await updateBookingStateWithRetry(openAiWs.phoneNumber, 'awaiting_time');
 }
 
 /**
@@ -841,19 +926,55 @@ async function askForSuitableTime(openAiWs) {
  * @param {WebSocket} openAiWs - The OpenAI WebSocket connection.
  */
 async function askForEmail(openAiWs) {
-    const prompt = "Great! Please provide your email address so I can send you the meeting details. Please spell it out for me.";
-    openAiWs.send(JSON.stringify({
-        type: "response.create",
-        response: {
-            modalities: ["text", "audio"],
-            instructions: prompt,
-            voice: VOICE,
-            temperature: 0.7,
-            max_output_tokens: 150,
-        },
-    }));
-    openAiWs.bookingState = 'awaiting_email';
-    await updateBookingState(openAiWs.phoneNumber, 'awaiting_email');
+    try {
+        const user = await createOrGetUserWithRetry(openAiWs.phoneNumber);
+
+        if (user && user.email) {
+            // Ask if they want to use the stored email
+            const prompt = `I see that I have your email address on file (${spellOutEmail(user.email)}). Would you like me to use this email for the booking? Please say yes or no.`;
+            openAiWs.send(JSON.stringify({
+                type: "response.create",
+                response: {
+                    modalities: ["text", "audio"],
+                    instructions: prompt,
+                    voice: VOICE,
+                    temperature: 0.7,
+                    max_output_tokens: 150,
+                },
+            }));
+            openAiWs.email = user.email; // Store the existing email
+            openAiWs.bookingState = 'confirm_existing_email';
+        } else {
+            // Ask for new email
+            const prompt = "Please provide your email address so I can send you the meeting details. Please spell it out for me.";
+            openAiWs.send(JSON.stringify({
+                type: "response.create",
+                response: {
+                    modalities: ["text", "audio"],
+                    instructions: prompt,
+                    voice: VOICE,
+                    temperature: 0.7,
+                    max_output_tokens: 150,
+                },
+            }));
+            openAiWs.bookingState = 'awaiting_email';
+        }
+    } catch (error) {
+        console.error("Error in askForEmail:", error);
+        // Fallback to asking for new email
+        const prompt = "Please provide your email address so I can send you the meeting details. Please spell it out for me.";
+        openAiWs.send(JSON.stringify({
+            type: "response.create",
+            response: {
+                modalities: ["text", "audio"],
+                instructions: prompt,
+                voice: VOICE,
+                temperature: 0.7,
+                max_output_tokens: 150,
+            },
+        }));
+        openAiWs.bookingState = 'awaiting_email';
+    }
 }
 
 /**
@@ -874,7 +995,7 @@ async function confirmEmail(openAiWs, email) {
         },
     }));
     openAiWs.bookingState = 'confirm_email';
-    await updateBookingState(openAiWs.phoneNumber, 'confirm_email');
+    await updateBookingStateWithRetry(openAiWs.phoneNumber, 'confirm_email');
 }
 
 /**
@@ -885,7 +1006,6 @@ async function confirmEmail(openAiWs, email) {
  */
 async function handleEmailConfirmation(openAiWs, confirmation, email) {
     if (confirmation === 'yes') {
-        // Proceed to book the meeting
         const bookingSuccess = await bookTrainingSession(openAiWs, openAiWs.preferred_time, email);
         if (bookingSuccess) {
             const prompt = "Your training session has been booked successfully! I've sent the meeting details to your email. Looking forward to your training session!";
@@ -900,7 +1020,7 @@ async function handleEmailConfirmation(openAiWs, confirmation, email) {
                 },
             }));
             openAiWs.bookingState = 'idle';
-            await updateBookingState(openAiWs.phoneNumber, 'idle');
+            await updateBookingStateWithRetry(openAiWs.phoneNumber, 'idle');
         } else {
             const prompt = "I'm sorry, I encountered an issue while booking your training session. Please try again later.";
             openAiWs.send(JSON.stringify({
@@ -914,23 +1034,10 @@ async function handleEmailConfirmation(openAiWs, confirmation, email) {
                 },
             }));
             openAiWs.bookingState = 'idle';
-            await updateBookingState(openAiWs.phoneNumber, 'idle');
+            await updateBookingStateWithRetry(openAiWs.phoneNumber, 'idle');
         }
     } else {
-        // Ask for email again
-        const prompt = "Alright, let's try that again. Please provide your email address so I can send you the meeting details. Please spell it out for me.";
-        openAiWs.send(JSON.stringify({
-            type: "response.create",
-            response: {
-                modalities: ["text", "audio"],
-                instructions: prompt,
-                voice: VOICE,
-                temperature: 0.7,
-                max_output_tokens: 150,
-            },
-        }));
-        openAiWs.bookingState = 'awaiting_email';
-        await updateBookingState(openAiWs.phoneNumber, 'awaiting_email');
+        await askForEmail(openAiWs); // This will now handle both new and existing email flows
     }
 }
 
@@ -949,15 +1056,14 @@ async function bookTrainingSession(openAiWs, preferredTime, email) {
         }
 
         const startTime = new Date(preferredTime);
-        const endTime = new Date(startTime.getTime() + 30 * 60 * 1000); // Add 30 minutes
+        const endTime = new Date(startTime.getTime() + 30 * 60 * 1000);
 
-        // Define event details
         const event = {
             summary: "Pokémon Training Session",
             description: "A training session with Marcus, the Pokémon Master.",
             start: {
                 dateTime: startTime.toISOString(),
-                timeZone: 'America/Los_Angeles', // Adjust as needed
+                timeZone: 'America/Los_Angeles',
             },
             end: {
                 dateTime: endTime.toISOString(),
@@ -985,11 +1091,25 @@ async function bookTrainingSession(openAiWs, preferredTime, email) {
 
         if (response.status === 200 || response.status === 201) {
             console.log("Event created:", response.data.htmlLink);
-            return true;
-        } else {
-            console.error("Failed to create event:", response.status, response.statusText);
-            return false;
+            
+            // Create booking record in database
+            const booking = await createBookingWithRetry(
+                openAiWs.phoneNumber,
+                openAiWs.conversationId,
+                response.data.id,
+                startTime.toISOString(),
+                email
+            );
+
+            if (booking) {
+                // Update user's email if not already set
+                await updateUserEmailWithRetry(openAiWs.phoneNumber, email);
+                return true;
+            }
         }
+        
+        console.error("Failed to create event:", response.status, response.statusText);
+        return false;
 
     } catch (error) {
         console.error("Error booking training session:", error);
@@ -1024,38 +1144,31 @@ async function finalizeConversation(openAiWs) {
         });
 
         if (!summaryResponse.ok) {
-            console.error("Error generating summary:", summaryResponse.statusText);
-            return;
+            throw new Error("Error generating summary: " + summaryResponse.statusText);
         }
 
         const summaryData = await summaryResponse.json();
         const summary = summaryData.choices[0].message.content.trim();
 
-        console.log("Generated summary:", summary);
-
-        // **New Step:** Extract user's name from the summary
+        // Extract user's name from the summary
         const extractedName = await extractUserNameFromSummary(summary);
         if (extractedName) {
-            await updateUserName(openAiWs.phoneNumber, extractedName);
-        } else {
-            console.log("User name not found in summary.");
+            await updateUserNameWithRetry(openAiWs.phoneNumber, extractedName);
         }
 
-        // Update the database with the full dialogue and summary
-        const { data, error } = await supabase
-            .from('user_conversations')
-            .update({
-                full_dialogue: openAiWs.fullDialogue,
-                summary: summary,
-                last_conversation_timestamp: new Date().toISOString(),
-            })
-            .eq('phone_number', openAiWs.phoneNumber);
-
-        if (error) {
-            console.error("Error updating conversation summary:", error);
-        } else {
-            console.log("Conversation summary updated successfully");
+        // Extract email from the summary
+        const extractedEmail = await extractEmailFromSummary(summary);
+        if (extractedEmail) {
+            await updateUserEmailWithRetry(openAiWs.phoneNumber, extractedEmail);
         }
+
+        // Finalize the conversation in the database
+        await finalizeConversationInDbWithRetry(
+            openAiWs.conversationId,
+            openAiWs.fullDialogue,
+            summary
+        );
+
     } catch (error) {
         console.error("Error finalizing conversation:", error);
     }
@@ -1127,6 +1240,58 @@ async function updateBookingState(phoneNumber, state) {
     }
 }
 
+// New function to handle existing email confirmation
+async function handleExistingEmailConfirmation(openAiWs, confirmation) {
+    if (confirmation.includes('yes')) {
+        // Proceed with booking using stored email
+        const bookingSuccess = await bookTrainingSession(openAiWs, openAiWs.preferred_time, openAiWs.email);
+        if (bookingSuccess) {
+            const prompt = "Perfect! Your training session has been booked successfully! I've sent the meeting details to your email. Looking forward to your training session!";
+            openAiWs.send(JSON.stringify({
+                type: "response.create",
+                response: {
+                    modalities: ["text", "audio"],
+                    instructions: prompt,
+                    voice: VOICE,
+                    temperature: 0.7,
+                    max_output_tokens: 150,
+                },
+            }));
+            openAiWs.bookingState = 'idle';
+            await updateBookingStateWithRetry(openAiWs.phoneNumber, 'idle');
+        } else {
+            const prompt = "I'm sorry, I encountered an issue while booking your training session. Please try again later.";
+            openAiWs.send(JSON.stringify({
+                type: "response.create",
+                response: {
+                    modalities: ["text", "audio"],
+                    instructions: prompt,
+                    voice: VOICE,
+                    temperature: 0.7,
+                    max_output_tokens: 150,
+                },
+            }));
+            openAiWs.bookingState = 'idle';
+            await updateBookingStateWithRetry(openAiWs.phoneNumber, 'idle');
+        }
+    } else {
+        // Ask for new email
+        const prompt = "No problem! Please spell out the email address you'd like to use for this booking.";
+        openAiWs.send(JSON.stringify({
+            type: "response.create",
+            response: {
+                modalities: ["text", "audio"],
+                instructions: prompt,
+                voice: VOICE,
+                temperature: 0.7,
+                max_output_tokens: 150,
+            },
+        }));
+        openAiWs.bookingState = 'awaiting_email';
+        await updateBookingStateWithRetry(openAiWs.phoneNumber, 'awaiting_email');
+    }
+}
+
 // Start the server
 fastifyInstance.listen({ port: PORT }, (err, address) => {
     if (err) {
@@ -1135,3 +1300,4 @@ fastifyInstance.listen({ port: PORT }, (err, address) => {
     }
     console.log(`AI Assistant With a Brain Server is listening on ${address}`);
 });
+
