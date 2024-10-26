@@ -862,7 +862,50 @@ async function updateUserName(phoneNumber, name) {
 
 // **Helper Functions for Booking Flow**
 
-// ... (parseUserTime, spellOutEmail, reconstructEmail, validateEmail functions remain unchanged)
+/**
+ * Function to parse user-provided time using chrono-node
+ * @param {string} userInput - The user's input containing the preferred time.
+ * @returns {string|null} - ISO string of the parsed date or null if parsing fails.
+ */
+function parseUserTime(userInput) {
+    const parsedDate = chrono.parseDate(userInput);
+    if (parsedDate) {
+        return parsedDate.toISOString();
+    } else {
+        return null;
+    }
+}
+
+/**
+ * Function to spell out email
+ * @param {string} email - The email address to spell out.
+ * @returns {string} - Spelled out email.
+ */
+function spellOutEmail(email) {
+    return email.split('').join(' ');
+}
+
+/**
+ * Function to reconstruct email from spelled-out letters
+ * @param {string} spelledOutEmail - The spelled out email (e.g., "j o h n dot d o e at example dot com").
+ * @returns {string} - Reconstructed email.
+ */
+function reconstructEmail(spelledOutEmail) {
+    let email = spelledOutEmail.toLowerCase();
+    email = email.replace(/\bat\b/g, '@').replace(/\bdot\b/g, '.').replace(/\s+/g, '');
+    return email;
+}
+
+/**
+ * Function to validate email format
+ * @param {string} email - The email address to validate.
+ * @returns {boolean} - True if valid, false otherwise.
+ */
+function validateEmail(email) {
+    const re = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+    return re.test(email);
+}
+
 
 // Function to ask user for a suitable time for the training session
 async function askForSuitableTime(openAiWs) {
