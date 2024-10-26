@@ -79,10 +79,29 @@ export async function dbUpdateUserEmail(phoneNumber, email) {
 }
 
 // Conversation Operations
-export async function dbCreateConversation(phoneNumber) {
+export async function dbCreateConversation(phoneNumber, callSid) {
+    // Check if a conversation already exists for this callSid
+    const { data: existingConversation, error: fetchError } = await supabase
+        .from('conversations')
+        .select('*')
+        .eq('conversation_id', callSid)
+        .single();
+
+    if (fetchError && fetchError.code !== 'PGRST116') { // Ignore 'no rows found' error
+        console.error("Error fetching conversation:", fetchError);
+        return null;
+    }
+
+    if (existingConversation) {
+        console.log(`Conversation already exists for conversation_id (callSid): ${callSid}`);
+        return existingConversation;
+    }
+
+    // If no existing conversation, create a new one with conversation_id set to callSid
     const { data: conversation, error } = await supabase
         .from('conversations')
         .insert([{
+            conversation_id: callSid, // Set conversation_id to callSid
             phone_number: phoneNumber,
             start_timestamp: new Date().toISOString()
         }])

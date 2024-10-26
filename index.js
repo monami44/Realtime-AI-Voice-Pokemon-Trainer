@@ -175,7 +175,7 @@ async function withRetry(operation, options = RETRY_OPTIONS) {
 const createOrGetUserWithRetry = (phoneNumber) => withRetry(() => dbCreateOrGetUser(phoneNumber));
 const updateUserNameWithRetry = (phoneNumber, name) => withRetry(() => dbUpdateUserName(phoneNumber, name));
 const updateUserEmailWithRetry = (phoneNumber, email) => withRetry(() => dbUpdateUserEmail(phoneNumber, email));
-const createConversationWithRetry = (phoneNumber) => withRetry(() => dbCreateConversation(phoneNumber));
+const createConversationWithRetry = (phoneNumber, callSid) => withRetry(() => dbCreateConversation(phoneNumber, callSid)); // Updated
 const updateConversationWithRetry = (conversationId, updates) => withRetry(() => dbUpdateConversation(conversationId, updates));
 const finalizeConversationInDbWithRetry = (conversationId, fullDialogue, summary) => withRetry(() => dbFinalizeConversation(conversationId, fullDialogue, summary));
 const getLastConversationWithRetry = (phoneNumber) => withRetry(() => dbGetLastConversation(phoneNumber));
@@ -757,12 +757,12 @@ async function handleIncomingCall(callSid, openAiWs) {
             throw new Error("Failed to create or get user");
         }
 
-        // Create new conversation
-        const conversation = await createConversationWithRetry(phoneNumber);
+        // Create new conversation with conversation_id set to callSid
+        const conversation = await createConversationWithRetry(phoneNumber, callSid);
         if (!conversation) {
             throw new Error("Failed to create conversation");
         }
-        openAiWs.conversationId = conversation.conversation_id;
+        openAiWs.conversationId = conversation.conversation_id; // This is equal to callSid
 
         console.log(`Handling incoming call from ${phoneNumber} with Call SID: ${callSid}`);
 
@@ -1018,7 +1018,7 @@ async function bookTrainingSession(openAiWs, preferredTime, email) {
             // Create booking record in database
             const booking = await createBookingWithRetry(
                 openAiWs.phoneNumber,
-                openAiWs.conversationId,
+                openAiWs.conversationId, // This is equal to callSid
                 response.data.id,
                 startTime.toISOString(),
                 email
