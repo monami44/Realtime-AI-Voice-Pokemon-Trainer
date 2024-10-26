@@ -77,7 +77,8 @@ Key Guidelines:
     - If they decline stored email or don't have one, ask them to spell out their email address
   * Always verify email accuracy by spelling it back to them before proceeding
   * Only schedule after email confirmation
-- Make the conversation natural and engaging while following these guidelines.`;
+- Make the conversation natural and engaging while following these guidelines.
+- NEVER ask if the user has a stored email address, but spell it out to them if you already found one and ask if they want to proceed with it.`;
 
 const LOG_EVENT_TYPES = [
     "response.content.done",
@@ -743,12 +744,12 @@ function sanitizeInput(input) {
 async function askSupabaseAssistant(question) {
     console.log("Querying knowledge base for:", question);
     try {
-        // Generate embedding for the question using Azure OpenAI's Embedding API
-        const embeddingResponse = await fetch(`${process.env.AZURE_OPENAI_CHAT_ENDPOINT}/embeddings`, {
+        // Generate embedding for the question using OpenAI's Embedding API
+        const embeddingResponse = await fetch("https://api.openai.com/v1/embeddings", {
             method: "POST",
             headers: {
                 "Content-Type": "application/json",
-                "api-key": process.env.AZURE_OPENAI_CHAT_API_KEY,
+                "Authorization": `Bearer ${process.env.OPENAI_API_KEY}`,
             },
             body: JSON.stringify({
                 input: question,
@@ -757,7 +758,7 @@ async function askSupabaseAssistant(question) {
         });
 
         if (!embeddingResponse.ok) {
-            console.error("Error fetching embedding from Azure OpenAI:", embeddingResponse.statusText);
+            console.error("Error fetching embedding from OpenAI:", embeddingResponse.statusText);
             return null;
         }
 
