@@ -751,7 +751,7 @@ async function handleIncomingCall(callSid, openAiWs) {
         // Store the phone number
         openAiWs.phoneNumber = phoneNumber;
 
-        // Create or get user
+        // Create or get user with retry
         const user = await createOrGetUserWithRetry(phoneNumber);
         if (!user) {
             throw new Error("Failed to create or get user");
@@ -762,23 +762,29 @@ async function handleIncomingCall(callSid, openAiWs) {
         if (!conversation) {
             throw new Error("Failed to create conversation");
         }
-        openAiWs.conversationId = conversation.conversation_id; // This is equal to callSid
+        openAiWs.conversationId = conversation.conversation_id;
 
         console.log(`Handling incoming call from ${phoneNumber} with Call SID: ${callSid}`);
 
         // Get last conversation for context
         const lastConversation = await getLastConversationWithRetry(phoneNumber);
+        console.log("Last conversation data:", lastConversation);
+        console.log("User details:", user);
 
         let prompt;
         if (user.name) {
-            // Returning user with a name
+            const lastTopic = lastConversation?.summary 
+                ? summarizeLastTopic(lastConversation.summary)  // New helper function
+                : "our introduction";
+            
             prompt = RETURNING_USER_MESSAGE_TEMPLATE
                 .replace('{name}', user.name)
-                .replace('{lastTopic}', lastConversation?.summary || 'Pokémon');
+                .replace('{lastTopic}', lastTopic);
+            console.log("Generated returning user prompt:", prompt);
             sendUserMessage(openAiWs, prompt, true);
         } else {
-            // New user
             prompt = NEW_USER_PROMPT;
+            console.log("Generated new user prompt:", prompt);
             sendUserMessage(openAiWs, prompt);
         }
 
@@ -802,6 +808,25 @@ function sendUserMessage(openAiWs, prompt, isReturningUser = false) {
     }));
 
     // We don't append anything to fullDialogue here, as we're waiting for the AI's response
+}
+
+// New helper function to clean up the summary (in index.js)
+function summarizeLastTopic(summary) {
+    // Remove common prefixes that might appear in summaries
+    let cleanSummary = summary
+        .replace(/^The user |^User |^The AI |^AI /, '')
+        .replace(/asked (about|for) /, '')
+        .replace(/^The conversation was about /, '');
+
+    // Extract the main topic, typically before the first period or detailed explanation
+    const mainTopic = cleanSummary.split('.')[0].trim();
+    
+    // If the topic is too long, try to shorten it
+    if (mainTopic.length > 50) {
+        return mainTopic.substring(0, 47) + '...';
+    }
+    
+    return mainTopic;
 }
 
 // Function to update user name if not already set
@@ -1059,8 +1084,8 @@ async function finalizeConversation(openAiWs) {
             },
             body: JSON.stringify({
                 messages: [
-                    { role: "system", content: "You are a helpful assistant that summarizes conversations." },
-                    { role: "user", content: `Please summarize the following conversation:\n${openAiWs.fullDialogue}` }
+                    { role: "system", content: "You are a helpful assistant that summarizes conversations without including greetings." },
+                    { role: "user", content: `Please summarize the following conversation:\n${openAiWs.fullDialogue}. Please do not include the greetings in summary, only the main conversation topic.` }
                 ],
                 max_tokens: 150
             }),

@@ -23,31 +23,35 @@ const supabase = createClient(supabaseUrl, supabaseKey);
 export async function dbCreateOrGetUser(phoneNumber) {
     const { data: existingUser, error: fetchError } = await supabase
         .from('users')
-        .select('*')
+        .select('phone_number, name, email, created_at')
         .eq('phone_number', phoneNumber)
         .single();
 
-    if (fetchError && fetchError.code !== 'PGRST116') {
-        console.error("Error fetching user:", fetchError);
-        return null;
+    if (fetchError) {
+        if (fetchError.code !== 'PGRST116') {  // Not a "no rows found" error
+            console.error("Error fetching user:", fetchError);
+            return null;
+        }
+        
+        // Create new user if not found
+        const { data: newUser, error: insertError } = await supabase
+            .from('users')
+            .insert([{ 
+                phone_number: phoneNumber,
+                created_at: new Date().toISOString()
+            }])
+            .select('phone_number, name, email, created_at')
+            .single();
+
+        if (insertError) {
+            console.error("Error creating new user:", insertError);
+            return null;
+        }
+
+        return newUser;
     }
 
-    if (existingUser) {
-        return existingUser;
-    }
-
-    const { data: newUser, error: insertError } = await supabase
-        .from('users')
-        .insert([{ phone_number: phoneNumber }])
-        .select()
-        .single();
-
-    if (insertError) {
-        console.error("Error creating new user:", insertError);
-        return null;
-    }
-
-    return newUser;
+    return existingUser;
 }
 
 export async function dbUpdateUserName(phoneNumber, name) {
@@ -147,19 +151,30 @@ export async function dbFinalizeConversation(conversationId, fullDialogue, summa
 }
 
 export async function dbGetLastConversation(phoneNumber) {
+    console.log("Fetching last conversation for phone number:", phoneNumber);
+    
     const { data, error } = await supabase
         .from('conversations')
         .select('*')
         .eq('phone_number', phoneNumber)
-        .order('start_timestamp', { ascending: false })
+        .not('conversation_id', 'is', null)          // Ensure valid conversation ID
+        .not('summary', 'eq', '')                    // Exclude empty summaries
+        .not('full_dialogue', 'eq', '')              // Exclude empty dialogues
+        .not('end_timestamp', 'is', null)            // Only include completed conversations
+        .order('end_timestamp', { ascending: false }) // Order by end time instead of start time
         .limit(1)
         .single();
 
-    if (error && error.code !== 'PGRST116') {
+    if (error) {
+        if (error.code === 'PGRST116') {  // No data found
+            console.log("No previous conversation found for:", phoneNumber);
+            return null;
+        }
         console.error("Error fetching last conversation:", error);
         return null;
     }
 
+    console.log("Retrieved last conversation for:", phoneNumber, "Data:", data);
     return data;
 }
 
