@@ -82,6 +82,26 @@ export async function dbUpdateUserEmail(phoneNumber, email) {
     return true;
 }
 
+export async function dbGetUserEmail(phoneNumber) { // New function for email retrieval
+    console.log(`Fetching email for phone number: ${phoneNumber}`);
+    const { data, error } = await supabase
+        .from('users')
+        .select('email')
+        .eq('phone_number', phoneNumber)
+        .single();
+
+    if (error) {
+        if (error.code === 'PGRST116') { // No user found
+            console.log(`No user found with phone number: ${phoneNumber}`);
+            return null;
+        }
+        console.error("Error fetching user email:", error);
+        return null;
+    }
+
+    return data.email;
+}
+
 // Conversation Operations
 export async function dbCreateConversation(phoneNumber, callSid) {
     // Check if a conversation already exists for this callSid

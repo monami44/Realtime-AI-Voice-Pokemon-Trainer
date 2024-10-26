@@ -33,7 +33,8 @@ import {
     dbGetLastConversation,
     dbCreateBooking,
     dbUpdateBookingState,
-    extractEmailFromSummary
+    extractEmailFromSummary,
+    dbGetUserEmail // Added for email retrieval
 } from './database-utils.js';
 
 // Initialize Twilio client
@@ -69,7 +70,7 @@ Key Guidelines:
 - Don't reveal any technical details about the knowledge base or how you're accessing the information.
 - Be friendly and excited about sharing Pokémon knowledge!
 - For scheduling training sessions:
-  * When a user requests to schedule, first ask for their preferred time
+  * When a user requests to schedule, first ask for their preferred time and check the context for their email
   * When collecting email:
     - If they have a stored email, ask if they want to use it
     - If they confirm stored email, proceed with booking
@@ -199,6 +200,7 @@ const finalizeConversationInDbWithRetry = (conversationId, fullDialogue, summary
 const getLastConversationWithRetry = (phoneNumber) => withRetry(() => dbGetLastConversation(phoneNumber));
 const createBookingWithRetry = (phoneNumber, conversationId, eventId, time, email) => withRetry(() => dbCreateBooking(phoneNumber, conversationId, eventId, time, email));
 const updateBookingStateWithRetry = (bookingId, state) => withRetry(() => dbUpdateBookingState(bookingId, state));
+const getUserEmailWithRetry = (phoneNumber) => withRetry(() => dbGetUserEmail(phoneNumber)); // Added for email retrieval
 
 // Add error handling for WebSocket connections
 function setupWebSocketErrorHandling(ws) {
@@ -286,7 +288,9 @@ function sendSessionUpdate(ws) {
             input_audio_format: "g711_ulaw",
             output_audio_format: "g711_ulaw",
             voice: VOICE,
-            instructions: SYSTEM_MESSAGE,
+            instructions: `${SYSTEM_MESSAGE}
+- When confirming the user's email address, repeat it back to them and ask for confirmation.
+- Only trigger email retrieval and confirmation when scheduling a training session.`,
             tools: [
                 {
                     type: "function",
@@ -321,6 +325,16 @@ function sendSessionUpdate(ws) {
                             },
                         },
                         required: ["preferred_time", "email"],
+                        additionalProperties: false,
+                    },
+                },
+                {
+                    type: "function",
+                    name: "retrieve_user_email",
+                    description: "Retrieve the user's email address.",
+                    parameters: {
+                        type: "object",
+                        properties: {},
                         additionalProperties: false,
                     },
                 },
@@ -503,6 +517,65 @@ async function handleOpenAiMessage(openAiWs, data, connection, streamSid) {
                     await updateBookingStateWithRetry(openAiWs.phoneNumber, 'idle');
                 }
             }
+
+            if (functionName === "retrieve_user_email") {
+                console.log("AI is requesting user email.");
+                const phoneNumber = openAiWs.phoneNumber;
+                const email = await retrieveUserEmail(phoneNumber);
+                if (email) {
+                    console.log(`Sending email confirmation prompt to AI for phone number: ${phoneNumber} with email: ${email}`);
+                    
+                    // Send the email back to the AI as a function_call_output with modalities
+                    openAiWs.send(JSON.stringify({
+                        type: "conversation.item.create",
+                        item: {
+                            type: "function_call_output",
+                            output: email,
+                            modalities: ["text", "audio"],
+                        },
+                    }));
+                    
+                    // Send a prompt to confirm the email audibly
+                    openAiWs.send(JSON.stringify({
+                        type: "response.create",
+                        response: {
+                            modalities: ["text", "audio"],
+                            instructions: `Your email address is ${spellOutEmail(email)}. Is that correct? Please say "yes" or "no".`,
+                            voice: VOICE,
+                            temperature: 0.7,
+                            max_output_tokens: 150,
+                        },
+                    }));
+                    
+                    // Append the confirmation prompt to the dialogue
+                    openAiWs.fullDialogue += `AI: Your email address is ${spellOutEmail(email)}. Is that correct?\n`;
+                } else {
+                    console.log(`No email found for phone number: ${phoneNumber}`);
+                    openAiWs.send(JSON.stringify({
+                        type: "conversation.item.create",
+                        item: {
+                            type: "function_call_output",
+                            output: "No email found for the user.",
+                            modalities: ["text", "audio"],
+                        },
+                    }));
+                    
+                    // Prompt the user to provide their email audibly
+                    openAiWs.send(JSON.stringify({
+                        type: "response.create",
+                        response: {
+                            modalities: ["text", "audio"],
+                            instructions: "I couldn't find a stored email address for you. Could you please provide your email address? I'll confirm it with you before scheduling the training session.",
+                            voice: VOICE,
+                            temperature: 0.7,
+                            max_output_tokens: 150,
+                        },
+                    }));
+                    
+                    // Append the prompt to the dialogue
+                    openAiWs.fullDialogue += `AI: I couldn't find a stored email address for you. Could you please provide your email address? I'll confirm it with you before scheduling the training session.\n`;
+                }
+            }
         }
 
         if (response.type === "response.audio.delta" && response.delta) {
@@ -528,7 +601,9 @@ async function handleOpenAiMessage(openAiWs, data, connection, streamSid) {
                 // Handle booking flow based on booking_state
                 const bookingState = openAiWs.bookingState;
                 if (bookingState === 'idle') {
-                    if (response.content.toLowerCase().includes('training session') || response.content.toLowerCase().includes('book a training') || response.content.toLowerCase().includes('schedule a training')) {
+                    if (response.content.toLowerCase().includes('training session') || 
+                        response.content.toLowerCase().includes('book a training') || 
+                        response.content.toLowerCase().includes('schedule a training')) {
                         await askForSuitableTime(openAiWs);
                     }
                 } else if (bookingState === 'awaiting_time') {
@@ -551,7 +626,7 @@ async function handleOpenAiMessage(openAiWs, data, connection, streamSid) {
                             },
                         }));
                     }
-                } else if (bookingState === 'confirm_email') {
+                } else if (bookingState === 'confirm_email' || bookingState === 'confirm_existing_email') {
                     // Handle email confirmation
                     const confirmation = response.content.trim().toLowerCase();
                     const email = openAiWs.email;
@@ -716,7 +791,7 @@ async function askSupabaseAssistant(question) {
     }
 }
 
-// Handle messages from Twilio WebSocket
+// Function to handle messages from Twilio WebSocket
 function handleTwilioMessage(message, openAiWs, setStreamSid, setCallSid) {
     try {
         const data = JSON.parse(message);
@@ -948,6 +1023,7 @@ async function askForEmail(openAiWs) {
         const user = await createOrGetUserWithRetry(openAiWs.phoneNumber);
 
         if (user && user.email) {
+            console.log(`Stored email found for phone number: ${openAiWs.phoneNumber}`);
             // Ask if they want to use the stored email
             const prompt = `I see that I have your email address on file (${spellOutEmail(user.email)}). Would you like me to use this email for the booking? Please say yes or no.`;
             openAiWs.send(JSON.stringify({
@@ -962,7 +1038,9 @@ async function askForEmail(openAiWs) {
             }));
             openAiWs.email = user.email; // Store the existing email
             openAiWs.bookingState = 'confirm_existing_email';
+            await updateBookingStateWithRetry(openAiWs.phoneNumber, 'confirm_existing_email');
         } else {
+            console.log(`No stored email found for phone number: ${openAiWs.phoneNumber}`);
             // Ask for new email
             const prompt = "Please provide your email address so I can send you the meeting details. Please spell it out for me.";
             openAiWs.send(JSON.stringify({
@@ -976,6 +1054,7 @@ async function askForEmail(openAiWs) {
                 },
             }));
             openAiWs.bookingState = 'awaiting_email';
+            await updateBookingStateWithRetry(openAiWs.phoneNumber, 'awaiting_email');
         }
     } catch (error) {
         console.error("Error in askForEmail:", error);
@@ -992,6 +1071,7 @@ async function askForEmail(openAiWs) {
             },
         }));
         openAiWs.bookingState = 'awaiting_email';
+        await updateBookingStateWithRetry(openAiWs.phoneNumber, 'awaiting_email');
     }
 }
 
@@ -1010,44 +1090,6 @@ async function confirmEmail(openAiWs, email) {
     }));
     openAiWs.bookingState = 'confirm_email';
     await updateBookingStateWithRetry(openAiWs.phoneNumber, 'confirm_email');
-}
-
-// Function to handle email confirmation response
-async function handleEmailConfirmation(openAiWs, confirmation, email) {
-    if (confirmation === 'yes') {
-        const bookingSuccess = await bookTrainingSession(openAiWs, openAiWs.preferred_time, email);
-        if (bookingSuccess) {
-            const prompt = "Your training session has been booked successfully! I've sent the meeting details to your email. Looking forward to your training session!";
-            openAiWs.send(JSON.stringify({
-                type: "response.create",
-                response: {
-                    modalities: ["text", "audio"],
-                    instructions: prompt,
-                    voice: VOICE,
-                    temperature: 0.7,
-                    max_output_tokens: 150,
-                },
-            }));
-            openAiWs.bookingState = 'idle';
-            await updateBookingStateWithRetry(openAiWs.phoneNumber, 'idle');
-        } else {
-            const prompt = "I'm sorry, I encountered an issue while booking your training session. Please try again later.";
-            openAiWs.send(JSON.stringify({
-                type: "response.create",
-                response: {
-                    modalities: ["text", "audio"],
-                    instructions: prompt,
-                    voice: VOICE,
-                    temperature: 0.7,
-                    max_output_tokens: 150,
-                },
-            }));
-            openAiWs.bookingState = 'idle';
-            await updateBookingStateWithRetry(openAiWs.phoneNumber, 'idle');
-        }
-    } else {
-        await askForEmail(openAiWs); // This will now handle both new and existing email flows
-    }
 }
 
 /**
@@ -1309,3 +1351,21 @@ fastifyInstance.listen({ port: PORT }, (err, address) => {
     }
     console.log(`AI Assistant With a Brain Server is listening on ${address}`);
 });
+
+// New Function: Retrieve User Email
+async function retrieveUserEmail(phoneNumber) {
+    console.log("Retrieving user email for phone number:", phoneNumber);
+    try {
+        const email = await getUserEmailWithRetry(phoneNumber);
+        if (email) {
+            console.log("Email retrieved:", email);
+            return email;
+        } else {
+            console.log("No email found for user.");
+            return null;
+        }
+    } catch (error) {
+        console.error("Error retrieving user email:", error);
+        return null;
+    }
+}
