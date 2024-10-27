@@ -77,9 +77,14 @@ Key Guidelines:
     - If they decline stored email or don't have one, ask them to spell out their email address
   * Always verify email accuracy by spelling it back to them before proceeding
   * Only schedule after email confirmation
+- For investment confirmations:
+  * When a user expresses interest in investing, ask if they are ready to be redirected to a fundraising expert
+  * Await their affirmation (e.g., "yes") before proceeding
+  * Upon affirmation, trigger the redirect to the fundraising expert
 - Make the conversation natural and engaging while following these guidelines.
-- NEVER ask if the user has a stored email address, but spell it out to them if you already found one and ask if they want to proceed with it.`;
-
+- NEVER ask if the user has a stored email address, but spell it out to them if you already found one and ask if they want to proceed with it.
+- If the user is interested in investing, first ask if the user is ready to be redirected and if the user agrees, redirect the call to a fundraising expert.`;
+    
 const LOG_EVENT_TYPES = [
     "response.content.done",
     "response.function_call_arguments.done",
@@ -200,7 +205,7 @@ const updateConversationWithRetry = (conversationId, updates) => withRetry(() =>
 const finalizeConversationInDbWithRetry = (conversationId, fullDialogue, summary) => withRetry(() => dbFinalizeConversation(conversationId, fullDialogue, summary));
 const getLastConversationWithRetry = (phoneNumber) => withRetry(() => dbGetLastConversation(phoneNumber));
 const createBookingWithRetry = (phoneNumber, conversationId, eventId, time, email) => withRetry(() => dbCreateBooking(phoneNumber, conversationId, eventId, time, email));
-const updateBookingStateWithRetry = (bookingId, state) => withRetry(() => dbUpdateBookingState(bookingId, state));
+const updateBookingStateWithRetry = (phoneNumber, state) => withRetry(() => dbUpdateBookingState(phoneNumber, state));
 const getUserEmailWithRetry = (phoneNumber) => withRetry(() => dbGetUserEmail(phoneNumber)); // Added for email retrieval
 
 // Add error handling for WebSocket connections
@@ -291,7 +296,8 @@ function sendSessionUpdate(ws) {
             voice: VOICE,
             instructions: `${SYSTEM_MESSAGE}
 - When confirming the user's email address, repeat it back to them and ask for confirmation.
-- Only trigger email retrieval and confirmation when scheduling a training session.`,
+- Only trigger email retrieval and confirmation when scheduling a training session.
+- When handling investment confirmations, ask for user affirmation before redirecting to a fundraising expert.`,
             tools: [
                 {
                     type: "function",
@@ -333,6 +339,16 @@ function sendSessionUpdate(ws) {
                     type: "function",
                     name: "retrieve_user_email",
                     description: "Retrieve the user's email address.",
+                    parameters: {
+                        type: "object",
+                        properties: {},
+                        additionalProperties: false,
+                    },
+                },
+                {
+                    type: "function",
+                    name: "handle_investment_query",
+                    description: "Handle investment inquiries by offering to connect the caller to a fundraising expert.",
                     parameters: {
                         type: "object",
                         properties: {},
@@ -577,6 +593,23 @@ async function handleOpenAiMessage(openAiWs, data, connection, streamSid) {
                     openAiWs.fullDialogue += `AI: I couldn't find a stored email address for you. Could you please provide your email address? I'll confirm it with you before scheduling the training session.\n`;
                 }
             }
+
+            if (functionName === "handle_investment_query") {
+                console.log("Handling investment inquiry.");
+                const prompt = "It's an honor for us to have you as one of the investors. To discuss this further I will need to forward you to our fundraising expert. Is that okay for you?";
+                openAiWs.send(JSON.stringify({
+                    type: "response.create",
+                    response: {
+                        modalities: ["text", "audio"],
+                        instructions: prompt,
+                        voice: VOICE,
+                        temperature: 0.7,
+                        max_output_tokens: 150,
+                    },
+                }));
+                openAiWs.bookingState = 'awaiting_investment_confirmation';
+                await updateBookingStateWithRetry(openAiWs.phoneNumber, 'awaiting_investment_confirmation');
+            }
         }
 
         if (response.type === "response.audio.delta" && response.delta) {
@@ -632,6 +665,28 @@ async function handleOpenAiMessage(openAiWs, data, connection, streamSid) {
                     const confirmation = response.content.trim().toLowerCase();
                     const email = openAiWs.email;
                     await handleEmailConfirmation(openAiWs, confirmation, email);
+                } else if (bookingState === 'awaiting_investment_confirmation') {
+                    // Handle investment confirmation
+                    const confirmation = response.content.trim().toLowerCase();
+                    if (confirmation.includes('yes')) {
+                        await redirectToFundraisingExpert(openAiWs.callSid);
+                        openAiWs.bookingState = 'idle';
+                        await updateBookingStateWithRetry(openAiWs.phoneNumber, 'idle');
+                    } else {
+                        const prompt = "Understood. If you have any other questions or need further assistance, feel free to ask!";
+                        openAiWs.send(JSON.stringify({
+                            type: "response.create",
+                            response: {
+                                modalities: ["text", "audio"],
+                                instructions: prompt,
+                                voice: VOICE,
+                                temperature: 0.7,
+                                max_output_tokens: 150,
+                            },
+                        }));
+                        openAiWs.bookingState = 'idle';
+                        await updateBookingStateWithRetry(openAiWs.phoneNumber, 'idle');
+                    }
                 }
             } else {
                 console.log("Skipping appending AI function call output to fullDialogue");
@@ -718,6 +773,28 @@ async function handleOpenAiMessage(openAiWs, data, connection, streamSid) {
             } else if (bookingState === 'confirm_existing_email') {
                 const confirmation = transcribedText.trim().toLowerCase();
                 await handleExistingEmailConfirmation(openAiWs, confirmation);
+            } else if (bookingState === 'awaiting_investment_confirmation') {
+                // Handle investment confirmation based on user input
+                const confirmation = transcribedText.trim().toLowerCase();
+                if (confirmation.includes('yes')) {
+                    await redirectToFundraisingExpert(openAiWs.callSid);
+                    openAiWs.bookingState = 'idle';
+                    await updateBookingStateWithRetry(openAiWs.phoneNumber, 'idle');
+                } else {
+                    const prompt = "Understood. If you have any other questions or need further assistance, feel free to ask!";
+                    openAiWs.send(JSON.stringify({
+                        type: "response.create",
+                        response: {
+                            modalities: ["text", "audio"],
+                            instructions: prompt,
+                            voice: VOICE,
+                            temperature: 0.7,
+                            max_output_tokens: 150,
+                        },
+                    }));
+                    openAiWs.bookingState = 'idle';
+                    await updateBookingStateWithRetry(openAiWs.phoneNumber, 'idle');
+                }
             }
 
             // Update last conversation
@@ -1344,15 +1421,6 @@ async function handleExistingEmailConfirmation(openAiWs, confirmation) {
     }
 }
 
-// Start the server
-fastifyInstance.listen({ port: PORT }, (err, address) => {
-    if (err) {
-        console.error(err);
-        process.exit(1);
-    }
-    console.log(`AI Assistant With a Brain Server is listening on ${address}`);
-});
-
 // New Function: Retrieve User Email
 async function retrieveUserEmail(phoneNumber) {
     console.log("Retrieving user email for phone number:", phoneNumber);
@@ -1368,5 +1436,103 @@ async function retrieveUserEmail(phoneNumber) {
     } catch (error) {
         console.error("Error retrieving user email:", error);
         return null;
+    }
+}
+
+async function redirectToFundraisingExpert(callSid) {
+    try {
+        console.log(`Attempting to redirect Call SID: ${callSid} to fundraising expert.`);
+
+        const twiml = new twilio.twiml.VoiceResponse();
+        twiml.dial('+491774709974', {
+            statusCallback: 'https://1f2e-185-134-138-245.ngrok-free.app/call-status',
+            statusCallbackEvent: 'initiated ringing answered completed',
+            statusCallbackMethod: 'POST',
+        });
+
+        console.log(`Generated TwiML for redirection: ${twiml.toString()}`);
+
+        // Update the call with the new TwiML
+        const updatedCall = await twilioClient.calls(callSid).update({ twiml: twiml.toString() });
+
+        console.log(`Call updated successfully: ${JSON.stringify(updatedCall)}`);
+    } catch (error) {
+        console.error(`Error redirecting call ${callSid} to fundraising expert:`, error);
+    }
+}
+
+fastifyInstance.post('/call-status', async (request, reply) => {
+    const callStatus = request.body.CallStatus;
+    const callSid = request.body.CallSid;
+    console.log(`Call SID: ${callSid} Status: ${callStatus}`);
+    reply.sendStatus(200);
+});
+
+// Start the server
+fastifyInstance.listen({ port: PORT }, (err, address) => {
+    if (err) {
+        console.error(err);
+        process.exit(1);
+    }
+    console.log(`AI Assistant With a Brain Server is listening on ${address}`);
+});
+
+
+/* Additional Functions */
+
+/**
+ * Function to handle email confirmation based on user response
+ * @param {WebSocket} openAiWs - The OpenAI WebSocket connection.
+ * @param {string} confirmation - User's confirmation response.
+ * @param {string} email - User's email address.
+ */
+async function handleEmailConfirmation(openAiWs, confirmation, email) {
+    if (confirmation.includes('yes')) {
+        // Proceed with booking
+        const bookingSuccess = await bookTrainingSession(openAiWs, openAiWs.preferred_time, email);
+        if (bookingSuccess) {
+            const prompt = "Great! Your training session has been booked successfully! I've sent the meeting details to your email. Looking forward to your training session!";
+            openAiWs.send(JSON.stringify({
+                type: "response.create",
+                response: {
+                    modalities: ["text", "audio"],
+                    instructions: prompt,
+                    voice: VOICE,
+                    temperature: 0.7,
+                    max_output_tokens: 150,
+                },
+            }));
+            openAiWs.bookingState = 'idle';
+            await updateBookingStateWithRetry(openAiWs.phoneNumber, 'idle');
+        } else {
+            const prompt = "I'm sorry, I encountered an issue while booking your training session. Please try again later.";
+            openAiWs.send(JSON.stringify({
+                type: "response.create",
+                response: {
+                    modalities: ["text", "audio"],
+                    instructions: prompt,
+                    voice: VOICE,
+                    temperature: 0.7,
+                    max_output_tokens: 150,
+                },
+            }));
+            openAiWs.bookingState = 'idle';
+            await updateBookingStateWithRetry(openAiWs.phoneNumber, 'idle');
+        }
+    } else {
+        // Ask user to re-enter their email
+        const prompt = "No problem. Please provide your email address so I can send you the meeting details. Please spell it out for me.";
+        openAiWs.send(JSON.stringify({
+            type: "response.create",
+            response: {
+                modalities: ["text", "audio"],
+                instructions: prompt,
+                voice: VOICE,
+                temperature: 0.7,
+                max_output_tokens: 150,
+            },
+        }));
+        openAiWs.bookingState = 'awaiting_email';
+        await updateBookingStateWithRetry(openAiWs.phoneNumber, 'awaiting_email');
     }
 }
