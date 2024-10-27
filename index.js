@@ -355,6 +355,22 @@ function sendSessionUpdate(ws) {
                         additionalProperties: false,
                     },
                 },
+                {
+                    type: "function",
+                    name: "access_long_term_memory",
+                    description: "Retrieve relevant long-term memory information for the user based on the current context.",
+                    parameters: {
+                        type: "object",
+                        properties: {
+                            query: {
+                                type: "string",
+                                description: "The user's current message to query against long-term memory.",
+                            },
+                        },
+                        required: ["query"],
+                        additionalProperties: false,
+                    },
+                },
             ],
             modalities: ["text", "audio"],
             temperature: 0.7,
@@ -596,7 +612,7 @@ async function handleOpenAiMessage(openAiWs, data, connection, streamSid) {
 
             if (functionName === "handle_investment_query") {
                 console.log("Handling investment inquiry.");
-                const prompt = "It's an honor for us to have you as one of the investors. To discuss this further I will need to forward you to our fundraising expert. Is that okay for you?";
+                const prompt = "It's an honor that you're interested in investing. To discuss this further, I will need to forward you to our fundraising expert. Would you like me to connect you now? Please say yes or no.";
                 openAiWs.send(JSON.stringify({
                     type: "response.create",
                     response: {
@@ -609,6 +625,24 @@ async function handleOpenAiMessage(openAiWs, data, connection, streamSid) {
                 }));
                 openAiWs.bookingState = 'awaiting_investment_confirmation';
                 await updateBookingStateWithRetry(openAiWs.phoneNumber, 'awaiting_investment_confirmation');
+            }
+
+            if (functionName === "access_long_term_memory") {
+                const functionArgs = JSON.parse(response.arguments);
+                const userQuery = functionArgs.query;
+
+                const memories = await getRelevantLongTermMemory(openAiWs.phoneNumber, userQuery);
+                if (memories.length > 0) {
+                    const memoryContent = memories.join(' ');
+                    openAiWs.send(JSON.stringify({
+                        type: "conversation.item.create",
+                        item: {
+                            type: "function_call_output",
+                            output: memoryContent,
+                            modalities: ["text", "audio"],
+                        },
+                    }));
+                }
             }
         }
 
@@ -715,6 +749,25 @@ async function handleOpenAiMessage(openAiWs, data, connection, streamSid) {
             // Sanitize and validate User message
             if (transcribedText && transcribedText.trim() !== "") {
                 const sanitizedText = sanitizeInput(transcribedText);
+                
+                // Check for relevant topics before state handling
+                if (isRelevantTopic(sanitizedText)) {
+                    const memories = await getRelevantLongTermMemory(openAiWs.phoneNumber, sanitizedText);
+                    if (memories.length > 0) {
+                        const enhancedPrompt = `The user said: "${sanitizedText}". Based on previous conversations, I remember: ${memories.join('. ')}. Please incorporate this information naturally into your response if relevant.`;
+                        openAiWs.send(JSON.stringify({
+                            type: "response.create",
+                            response: {
+                                modalities: ["text", "audio"],
+                                instructions: enhancedPrompt,
+                                voice: VOICE,
+                                temperature: 0.7,
+                                max_output_tokens: 150,
+                            },
+                        }));
+                    }
+                }
+
                 console.log("Appending User message:", sanitizedText);
                 openAiWs.fullDialogue += `User: ${sanitizedText}\n`;
                 openAiWs.lastUserMessage = sanitizedText;
@@ -774,12 +827,31 @@ async function handleOpenAiMessage(openAiWs, data, connection, streamSid) {
                 const confirmation = transcribedText.trim().toLowerCase();
                 await handleExistingEmailConfirmation(openAiWs, confirmation);
             } else if (bookingState === 'awaiting_investment_confirmation') {
-                // Handle investment confirmation based on user input
                 const confirmation = transcribedText.trim().toLowerCase();
                 if (confirmation.includes('yes')) {
-                    await redirectToFundraisingExpert(openAiWs.callSid);
-                    openAiWs.bookingState = 'idle';
-                    await updateBookingStateWithRetry(openAiWs.phoneNumber, 'idle');
+                    try {
+                        console.log("User confirmed investment interest. Initiating redirect...");
+                        await redirectToFundraisingExpert(openAiWs.callSid);
+                        console.log("Redirect completed successfully");
+                        
+                        // Reset booking state after redirect
+                        openAiWs.bookingState = 'idle';
+                        await updateBookingStateWithRetry(openAiWs.phoneNumber, 'idle');
+                    } catch (error) {
+                        console.error("Error during redirect:", error);
+                        // Send fallback message if redirect fails
+                        const fallbackPrompt = "I apologize, but I'm having trouble connecting you to our fundraising expert. Please try again in a moment.";
+                        openAiWs.send(JSON.stringify({
+                            type: "response.create",
+                            response: {
+                                modalities: ["text", "audio"],
+                                instructions: fallbackPrompt,
+                                voice: VOICE,
+                                temperature: 0.7,
+                                max_output_tokens: 150,
+                            },
+                        }));
+                    }
                 } else {
                     const prompt = "Understood. If you have any other questions or need further assistance, feel free to ask!";
                     openAiWs.send(JSON.stringify({
@@ -1291,6 +1363,20 @@ async function finalizeConversation(openAiWs) {
             await updateUserEmailWithRetry(openAiWs.phoneNumber, extractedEmail);
         }
 
+        // Extract relevant information for long-term memory
+        const relevantInfo = await extractRelevantInfo(openAiWs.fullDialogue);
+        
+        // Store relevant information in long-term memory
+        for (const [key, value] of Object.entries(relevantInfo)) {
+            if (value) {
+                await storeLongTermMemory(
+                    openAiWs.phoneNumber, 
+                    openAiWs.conversationId,
+                    `${key}: ${value}`
+                );
+            }
+        }
+
         // Finalize the conversation in the database
         await finalizeConversationInDbWithRetry(
             openAiWs.conversationId,
@@ -1440,24 +1526,41 @@ async function retrieveUserEmail(phoneNumber) {
 }
 
 async function redirectToFundraisingExpert(callSid) {
+    if (!callSid) {
+        throw new Error('Call SID is required for redirection');
+    }
+
     try {
         console.log(`Attempting to redirect Call SID: ${callSid} to fundraising expert.`);
 
         const twiml = new twilio.twiml.VoiceResponse();
+        twiml.say("Connecting you to our fundraising expert now.");
         twiml.dial('+491774709974', {
+            action: 'https://1f2e-185-134-138-245.ngrok-free.app/call-status',
+            method: 'POST',
+            timeout: 30,
+            statusCallbackEvent: ['initiated', 'ringing', 'answered', 'completed'],
             statusCallback: 'https://1f2e-185-134-138-245.ngrok-free.app/call-status',
-            statusCallbackEvent: 'initiated ringing answered completed',
-            statusCallbackMethod: 'POST',
+            statusCallbackMethod: 'POST'
         });
 
         console.log(`Generated TwiML for redirection: ${twiml.toString()}`);
 
         // Update the call with the new TwiML
-        const updatedCall = await twilioClient.calls(callSid).update({ twiml: twiml.toString() });
+        const updatedCall = await twilioClient.calls(callSid)
+            .update({
+                twiml: twiml.toString()
+            });
+
+        if (!updatedCall) {
+            throw new Error('Failed to update call with redirection TwiML');
+        }
 
         console.log(`Call updated successfully: ${JSON.stringify(updatedCall)}`);
+        return true;
     } catch (error) {
         console.error(`Error redirecting call ${callSid} to fundraising expert:`, error);
+        throw error; // Re-throw to handle in the calling function
     }
 }
 
@@ -1534,5 +1637,160 @@ async function handleEmailConfirmation(openAiWs, confirmation, email) {
         }));
         openAiWs.bookingState = 'awaiting_email';
         await updateBookingStateWithRetry(openAiWs.phoneNumber, 'awaiting_email');
+    }
+}
+
+// Add new helper functions for memory management
+function isRelevantTopic(text) {
+    const relevantKeywords = ['preference', 'likes', 'dislikes', 'favorite', 'history', 'previous', 'last time'];
+    return relevantKeywords.some(keyword => text.toLowerCase().includes(keyword));
+}
+
+async function getRelevantLongTermMemory(phoneNumber, query) {
+    try {
+        const { data, error } = await supabase
+            .from('long_term_memory')
+            .select('context')  // Changed from 'content' to 'context'
+            .eq('user_phone_number', phoneNumber)
+            .textSearch('context', query)  // Changed from 'content' to 'context'
+            .limit(3);
+
+        if (error) {
+            console.error('Error retrieving long-term memory:', error);
+            return [];
+        }
+
+        return data.map(item => item.context);  // Changed from 'content' to 'context'
+    } catch (error) {
+        console.error('Error in getRelevantLongTermMemory:', error);
+        return [];
+    }
+}
+
+async function storeLongTermMemory(phoneNumber, conversationId, context) {
+    try {
+        // Generate embedding for the context
+        const embedding = await generateEmbedding(context);
+        if (!embedding) {
+            console.error("Failed to generate embedding for memory");
+            return false;
+        }
+
+        const { error } = await supabase
+            .from('long_term_memory')
+            .insert({
+                user_phone_number: phoneNumber,
+                conversation_id: conversationId,
+                context: context,  // Changed from 'content' to 'context'
+                embedding: embedding,
+                created_at: new Date().toISOString()
+            });
+
+        if (error) {
+            console.error('Error storing long-term memory:', error);
+            return false;
+        }
+
+        console.log(`Successfully stored memory for ${phoneNumber}: ${context}`);
+        return true;
+    } catch (error) {
+        console.error('Error in storeLongTermMemory:', error);
+        return false;
+    }
+}
+
+/**
+ * Extracts relevant information from the conversation summary.
+ * @param {string} fullDialogue - The full dialogue of the conversation.
+ * @returns {object} - An object containing key-value pairs of extracted information.
+ */
+async function extractRelevantInfo(dialogue) {
+    const allowedFields = ['birthday', 'favorite_pokemon', 'allergies', 'parents_names', 'address'];
+    
+    try {
+        const response = await fetch(process.env.AZURE_OPENAI_CHAT_ENDPOINT, {
+            method: "POST",
+            headers: {
+                "Content-Type": "application/json",
+                "api-key": process.env.AZURE_OPENAI_CHAT_API_KEY,
+            },
+            body: JSON.stringify({
+                messages: [
+                    { 
+                        role: "system", 
+                        content: "Extract key information mentioned in the conversation. Only include the following fields if explicitly mentioned: birthday, favorite_pokemon, allergies, parents_names, address. Respond with a clean JSON object. Format values as plain strings without special formatting." 
+                    },
+                    { 
+                        role: "user", 
+                        content: dialogue 
+                    }
+                ],
+                temperature: 0.3,
+                max_tokens: 300,
+            }),
+        });
+
+        if (!response.ok) {
+            throw new Error(`HTTP error! status: ${response.status}`);
+        }
+
+        const data = await response.json();
+        const content = data.choices[0].message.content;
+
+        // Clean up the response
+        const cleanedContent = content
+            .replace(/```json\s*/, '')
+            .replace(/```\s*$/, '')
+            .trim();
+
+        const parsed = JSON.parse(cleanedContent);
+        const result = {};
+
+        // Only include allowed fields that are present
+        for (const field of allowedFields) {
+            if (parsed[field] && typeof parsed[field] === 'string' && parsed[field].trim()) {
+                result[field] = parsed[field].trim();
+            }
+        }
+
+        console.log("Extracted information:", result);
+        return result;
+
+    } catch (error) {
+        console.error("Error in extractRelevantInfo:", error);
+        return {};
+    }
+}
+
+
+/**
+ * Generates an embedding for a given text input using OpenAI's Embedding API.
+ * @param {string} text - The text to embed.
+ * @returns {Array<number> | null} - The embedding vector or null if failed.
+ */
+export async function generateEmbedding(text) {
+    try {
+        const response = await fetch("https://api.openai.com/v1/embeddings", {
+            method: "POST",
+            headers: {
+                "Content-Type": "application/json",
+                "Authorization": `Bearer ${process.env.OPENAI_API_KEY}`,
+            },
+            body: JSON.stringify({
+                input: text,
+                model: "text-embedding-ada-002",
+            }),
+        });
+
+        if (!response.ok) {
+            console.error("Error fetching embedding from OpenAI:", response.statusText);
+            return null;
+        }
+
+        const embeddingData = await response.json();
+        return embeddingData.data[0].embedding;
+    } catch (error) {
+        console.error("Error in generateEmbedding:", error);
+        return null;
     }
 }

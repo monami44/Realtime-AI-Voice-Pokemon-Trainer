@@ -17,7 +17,7 @@ if (!supabaseUrl || !supabaseKey) {
     throw new Error('Supabase URL or Key is missing. Please check your .env file.');
 }
 
-const supabase = createClient(supabaseUrl, supabaseKey);
+export const supabase = createClient(supabaseUrl, supabaseKey);
 
 // User Operations
 export async function dbCreateOrGetUser(phoneNumber) {
@@ -104,39 +104,25 @@ export async function dbGetUserEmail(phoneNumber) { // New function for email re
 
 // Conversation Operations
 export async function dbCreateConversation(phoneNumber, callSid) {
-    // Check if a conversation already exists for this callSid
-    const { data: existingConversation, error: fetchError } = await supabase
-        .from('conversations')
-        .select('*')
-        .eq('conversation_id', callSid)
-        .single();
-
-    if (fetchError && fetchError.code !== 'PGRST116') { // Ignore 'no rows found' error
-        console.error("Error fetching conversation:", fetchError);
-        return null;
-    }
-
-    if (existingConversation) {
-        console.log(`Conversation already exists for conversation_id (callSid): ${callSid}`);
-        return existingConversation;
-    }
-
-    // If no existing conversation, create a new one with conversation_id set to callSid
     const { data: conversation, error } = await supabase
         .from('conversations')
-        .insert([{
-            conversation_id: callSid, // Set conversation_id to callSid
+        .upsert({
+            conversation_id: callSid,
             phone_number: phoneNumber,
             start_timestamp: new Date().toISOString()
-        }])
+        }, {
+            onConflict: 'conversation_id',
+            ignoreDuplicates: false
+        })
         .select()
         .single();
 
     if (error) {
-        console.error("Error creating conversation:", error);
+        console.error("Error creating/updating conversation:", error);
         return null;
     }
 
+    console.log(`Conversation created/updated for conversation_id (callSid): ${callSid}`);
     return conversation;
 }
 
@@ -154,20 +140,32 @@ export async function dbUpdateConversation(conversationId, updates) {
 }
 
 export async function dbFinalizeConversation(conversationId, fullDialogue, summary) {
-    const { error } = await supabase
+    console.log(`Finalizing conversation: ${conversationId}`);
+    console.log(`Full dialogue length: ${fullDialogue.length}`);
+    console.log(`Summary length: ${summary.length}`);
+
+    const { data, error } = await supabase
         .from('conversations')
         .update({
             full_dialogue: fullDialogue,
             summary: summary,
             end_timestamp: new Date().toISOString()
         })
-        .eq('conversation_id', conversationId);
+        .eq('conversation_id', conversationId)
+        .select();
 
     if (error) {
         console.error("Error finalizing conversation:", error);
         return false;
     }
-    return true;
+
+    if (data && data.length > 0) {
+        console.log(`Successfully finalized conversation: ${conversationId}`);
+        return true;
+    } else {
+        console.error(`No conversation updated for ID: ${conversationId}`);
+        return false;
+    }
 }
 
 export async function dbGetLastConversation(phoneNumber) {
@@ -177,21 +175,21 @@ export async function dbGetLastConversation(phoneNumber) {
         .from('conversations')
         .select('*')
         .eq('phone_number', phoneNumber)
-        .not('conversation_id', 'is', null)          // Ensure valid conversation ID
-        .not('summary', 'eq', '')                    // Exclude empty summaries
-        .not('full_dialogue', 'eq', '')              // Exclude empty dialogues
-        .not('end_timestamp', 'is', null)            // Only include completed conversations
-        .order('end_timestamp', { ascending: false }) // Order by end time instead of start time
+        .not('conversation_id', 'is', null)
+        .not('summary', 'eq', '')
+        .not('full_dialogue', 'eq', '')
+        .not('end_timestamp', 'is', null)
+        .order('end_timestamp', { ascending: false })
         .limit(1)
         .single();
 
     if (error) {
-        if (error.code === 'PGRST116') {  // No data found
+        if (error.code === 'PGRST116') {
             console.log("No previous conversation found for:", phoneNumber);
             return null;
         }
         console.error("Error fetching last conversation:", error);
-        return null;
+        throw error; // Throw the error instead of returning null
     }
 
     console.log("Retrieved last conversation for:", phoneNumber, "Data:", data);
@@ -280,4 +278,22 @@ Extracted Email:`;
         console.error("Error in extractEmailFromSummary:", error);
         return null;
     }
+}
+
+export async function dbCheckConversationExists(conversationId) {
+    const { data, error } = await supabase
+        .from('conversations')
+        .select('conversation_id')
+        .eq('conversation_id', conversationId)
+        .single();
+
+    if (error) {
+        if (error.code === 'PGRST116') { // No data found
+            return false;
+        }
+        console.error("Error checking conversation existence:", error);
+        return null;
+    }
+
+    return true;
 }
