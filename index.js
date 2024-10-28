@@ -59,17 +59,17 @@ const calendar = google.calendar({ version: 'v3', auth: oauth2Client });
 const PORT = process.env.PORT || 5050;
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
 const VOICE = process.env.VOICE || "shimmer";
-const SYSTEM_MESSAGE = `You are an AI assistant designed as a Pokémon Master named Marcus. You have access to a vast knowledge base containing detailed information about all Pokémon, their abilities, types, evolutions, and related game mechanics.
+const SYSTEM_MESSAGE = `You are an AI assistant designed as an AgentOps Expert named Marcus. You have access to a vast knowledge base containing detailed information about AgentOps, its features, integrations, and best practices.
 
 Key Guidelines:
-- For ANY question related to Pokémon, you MUST check the knowledge base first.
-- Tell the user you're checking your Pokédex (which is your knowledge base) before answering.
-- Provide accurate and detailed answers about Pokémon, their characteristics, and the Pokémon world.
-- If you are unsure or need more information, tell the user "Let me check my Pokédex for that information." and use 'access_knowledge_base' to reference your knowledge base.
-- Keep your responses clear, informative, and in the style of an enthusiastic Pokémon expert.
+- For ANY question related to AgentOps, you MUST check the knowledge base first.
+- Tell the user you're checking the AgentOps documentation before answering.
+- Provide accurate and detailed answers about AgentOps, its features, and implementation details.
+- If you are unsure or need more information, tell the user "Let me check the AgentOps documentation for that information." and use 'access_knowledge_base' to reference the documentation.
+- Keep your responses clear, informative, and in the style of an enthusiastic AI/Agent Operations expert.
 - Don't reveal any technical details about the knowledge base or how you're accessing the information.
-- Be friendly and excited about sharing Pokémon knowledge!
-- For scheduling training sessions:
+- Be friendly and excited about sharing AgentOps knowledge!
+- For scheduling consultations:
   * When a user requests to schedule, first ask for their preferred time and check the context for their email
   * When collecting email:
     - If they have a stored email, ask if they want to use it
@@ -78,12 +78,10 @@ Key Guidelines:
   * Always verify email accuracy by spelling it back to them before proceeding
   * Only schedule after email confirmation
 - For investment confirmations:
-  * When a user expresses interest in investing, ask if they are ready to be redirected to a fundraising expert
+  * When a user expresses interest in investing in AgentOps, ask if they are ready to be redirected to an investment expert
   * Await their affirmation (e.g., "yes") before proceeding
-  * Upon affirmation, trigger the redirect to the fundraising expert
-- Make the conversation natural and engaging while following these guidelines.
-- NEVER ask if the user has a stored email address, but spell it out to them if you already found one and ask if they want to proceed with it.
-- If the user is interested in investing, first ask if the user is ready to be redirected and if the user agrees, redirect the call to a fundraising expert.`;
+  * Upon affirmation, trigger the redirect to the investment expert function.
+- Make the conversation natural and engaging while following these guidelines.`;
     
 const LOG_EVENT_TYPES = [
     "response.content.done",
@@ -439,7 +437,7 @@ async function handleOpenAiMessage(openAiWs, data, connection, streamSid) {
                 console.log("AI is accessing knowledge base for question:", question);
 
                 // Inform the user that the assistant is checking the knowledge base
-                const checkingMessage = "Give me a second, I'm checking my knowledge.";
+                const checkingMessage = "Give me a second, I'm checking the AgentOps documentation.";
                 openAiWs.send(
                     JSON.stringify({
                         type: "conversation.item.create",
@@ -477,7 +475,7 @@ async function handleOpenAiMessage(openAiWs, data, connection, streamSid) {
                                 instructions: `Based on the knowledge base, provide a concise summary of the following information: ${answer}`,
                                 voice: VOICE,
                                 temperature: 0.7,
-                                max_output_tokens: 150,
+                                max_output_tokens: 400,
                             },
                         }),
                     );
@@ -521,7 +519,7 @@ async function handleOpenAiMessage(openAiWs, data, connection, streamSid) {
                 const bookingSuccess = await bookTrainingSession(openAiWs, preferredTime, email);
 
                 if (bookingSuccess) {
-                    const prompt = "Your training session has been booked successfully! I've sent the meeting details to your email. Looking forward to your training session!";
+                    const prompt = "Perfect! Your AgentOps consultation has been booked successfully! I've sent the meeting details to your email. Looking forward to helping you optimize your AI agent operations!";
                     openAiWs.send(JSON.stringify({
                         type: "response.create",
                         response: {
@@ -576,7 +574,7 @@ async function handleOpenAiMessage(openAiWs, data, connection, streamSid) {
                             instructions: `Your email address is ${spellOutEmail(email)}. Is that correct? Please say "yes" or "no".`,
                             voice: VOICE,
                             temperature: 0.7,
-                            max_output_tokens: 150,
+                            max_output_tokens: 300,
                         },
                     }));
                     
@@ -612,19 +610,8 @@ async function handleOpenAiMessage(openAiWs, data, connection, streamSid) {
 
             if (functionName === "handle_investment_query") {
                 console.log("Handling investment inquiry.");
-                const prompt = "It's an honor that you're interested in investing. To discuss this further, I will need to forward you to our fundraising expert. Would you like me to connect you now? Please say yes or no.";
-                openAiWs.send(JSON.stringify({
-                    type: "response.create",
-                    response: {
-                        modalities: ["text", "audio"],
-                        instructions: prompt,
-                        voice: VOICE,
-                        temperature: 0.7,
-                        max_output_tokens: 150,
-                    },
-                }));
-                openAiWs.bookingState = 'awaiting_investment_confirmation';
-                await updateBookingStateWithRetry(openAiWs.phoneNumber, 'awaiting_investment_confirmation');
+                await handleInvestmentQuery(openAiWs);
+                return; // Important: Stop further processing
             }
 
             if (functionName === "access_long_term_memory") {
@@ -735,26 +722,31 @@ async function handleOpenAiMessage(openAiWs, data, connection, streamSid) {
                     const email = openAiWs.email;
                     await handleEmailConfirmation(openAiWs, confirmation, email);
                 } else if (bookingState === 'awaiting_investment_confirmation') {
-                    // Handle investment confirmation
                     const confirmation = response.content.trim().toLowerCase();
                     if (confirmation.includes('yes')) {
-                        await redirectToFundraisingExpert(openAiWs.callSid);
-                        openAiWs.bookingState = 'idle';
-                        await updateBookingStateWithRetry(openAiWs.phoneNumber, 'idle');
-                    } else {
-                        const prompt = "Understood. If you have any other questions or need further assistance, feel free to ask!";
-                        openAiWs.send(JSON.stringify({
-                            type: "response.create",
-                            response: {
-                                modalities: ["text", "audio"],
-                                instructions: prompt,
-                                voice: VOICE,
-                                temperature: 0.7,
-                                max_output_tokens: 150,
-                            },
-                        }));
-                        openAiWs.bookingState = 'idle';
-                        await updateBookingStateWithRetry(openAiWs.phoneNumber, 'idle');
+                        try {
+                            console.log("User confirmed investment interest. Initiating redirect...");
+                            await redirectToFundraisingExpert(openAiWs.callSid);
+                            console.log("Redirect completed successfully");
+                            
+                            // Reset booking state after redirect
+                            openAiWs.bookingState = 'idle';
+                            await updateBookingStateWithRetry(openAiWs.phoneNumber, 'idle');
+                        } catch (error) {
+                            console.error("Error during redirect:", error);
+                            // Send fallback message if redirect fails
+                            const fallbackPrompt = "I apologize, but I'm having trouble connecting you to our investment expert. Please try again in a moment.";
+                            openAiWs.send(JSON.stringify({
+                                type: "response.create",
+                                response: {
+                                    modalities: ["text", "audio"],
+                                    instructions: fallbackPrompt,
+                                    voice: VOICE,
+                                    temperature: 0.7,
+                                    max_output_tokens: 150,
+                                },
+                            }));
+                        }
                     }
                 }
             } else {
@@ -875,7 +867,7 @@ async function handleOpenAiMessage(openAiWs, data, connection, streamSid) {
                     } catch (error) {
                         console.error("Error during redirect:", error);
                         // Send fallback message if redirect fails
-                        const fallbackPrompt = "I apologize, but I'm having trouble connecting you to our fundraising expert. Please try again in a moment.";
+                        const fallbackPrompt = "I apologize, but I'm having trouble connecting you to our investment expert. Please try again in a moment.";
                         openAiWs.send(JSON.stringify({
                             type: "response.create",
                             response: {
@@ -949,7 +941,9 @@ async function askSupabaseAssistant(question) {
         const embeddingData = await embeddingResponse.json();
         const queryEmbedding = embeddingData.data[0].embedding;
 
-        const { data, error } = await supabase.rpc('search_documents', { query_embedding: queryEmbedding });
+        const { data, error } = await supabase.rpc('search_agentops', { 
+            query_embedding: queryEmbedding 
+        });
 
         if (error) {
             console.error("Error querying Supabase:", error.message);
@@ -1012,7 +1006,7 @@ function handleTwilioMessage(message, openAiWs, setStreamSid, setCallSid) {
 }
 
 // Constants for AI prompts
-const NEW_USER_PROMPT = "You are Marcus, a friendly Pokémon trainer AI assistant. Introduce yourself briefly and ask for the user's name.";
+const NEW_USER_PROMPT = "You are Marcus, a friendly AgentOps Expert AI assistant. Introduce yourself briefly and ask for the user's name.";
 
 // Function to handle incoming calls
 async function handleIncomingCall(callSid, openAiWs) {
@@ -1081,7 +1075,7 @@ function sendUserMessage(openAiWs, prompt, isReturningUser = false) {
             instructions: prompt,
             voice: VOICE,
             temperature: 0.7,
-            max_output_tokens: 300,
+            max_output_tokens: 500,
         },
     }));
 
@@ -1187,7 +1181,7 @@ function validateEmail(email) {
 
 // Function to ask user for a suitable time for the training session
 async function askForSuitableTime(openAiWs) {
-    const prompt = "Sure! I'd be happy to book a training session for you. What time would suit you best for the training session?";
+    const prompt = "I'd be happy to schedule a consultation session with our AgentOps expert. What time would suit you best for the consultation?";
     openAiWs.send(JSON.stringify({
         type: "response.create",
         response: {
@@ -1295,8 +1289,8 @@ async function bookTrainingSession(openAiWs, preferredTime, email) {
         const endTime = new Date(startTime.getTime() + 30 * 60 * 1000);
 
         const event = {
-            summary: "Pokémon Training Session",
-            description: "A training session with Marcus, the Pokémon Master.",
+            summary: "AgentOps Consultation Session",
+            description: "A consultation session with Marcus, the AgentOps Expert.",
             start: {
                 dateTime: startTime.toISOString(),
                 timeZone: 'America/Los_Angeles',
@@ -1677,7 +1671,24 @@ async function handleEmailConfirmation(openAiWs, confirmation, email) {
 
 // Add new helper functions for memory management
 function isRelevantTopic(text) {
-    const relevantKeywords = ['preference', 'likes', 'dislikes', 'favorite', 'history', 'previous', 'last time'];
+    const relevantKeywords = [
+        'agentic framework',
+        'crewai',
+        'autogen',
+        'langchain',
+        'llm',
+        'openai',
+        'gpt4',
+        'anthropic',
+        'claude',
+        'llama',
+        'cohere',
+        'company',
+        'birthday',
+        'address',
+        'previous implementation',
+        'last time'
+    ];
     return relevantKeywords.some(keyword => text.toLowerCase().includes(keyword));
 }
 
@@ -1767,7 +1778,13 @@ async function storeLongTermMemory(phoneNumber, conversationId, context) {
  * @returns {object} - An object containing key-value pairs of extracted information.
  */
 async function extractRelevantInfo(dialogue) {
-    const allowedFields = ['birthday', 'favorite_pokemon', 'allergies', 'parents_names', 'address'];
+    const allowedFields = [
+        'agentic_frameworks',
+        'preferred_llms',
+        'birthday',
+        'address',
+        'company'
+    ];
     
     try {
         const response = await fetch(process.env.AZURE_OPENAI_CHAT_ENDPOINT, {
@@ -1780,7 +1797,7 @@ async function extractRelevantInfo(dialogue) {
                 messages: [
                     { 
                         role: "system", 
-                        content: "Extract key information mentioned in the conversation. Only include the following fields if explicitly mentioned: birthday, favorite_pokemon, allergies, parents_names, address. Respond with a clean JSON object. Format values as plain strings without special formatting." 
+                        content: "Extract key information mentioned in the conversation. Only include the following fields if explicitly mentioned: agentic_frameworks (do not include AgentOps in this field, search for CrewAI, Langchain, Autogen, etc.), preferred_llms, birthday, address, company. Respond with a clean JSON object. Format values as plain strings without special formatting." 
                     },
                     { 
                         role: "user", 
@@ -1856,3 +1873,78 @@ export async function generateEmbedding(text) {
         return null;
     }
 }
+
+// Add this function near your other utility functions
+async function handleInvestmentQuery(openAiWs) {
+    try {
+        console.log("Handling investment inquiry");
+        
+        // Set the booking state
+        openAiWs.bookingState = 'awaiting_investment_confirmation';
+        await updateBookingStateWithRetry(openAiWs.phoneNumber, 'awaiting_investment_confirmation');
+
+        // Attempt to redirect immediately if we have the callSid
+        if (openAiWs.callSid) {
+            console.log("Initiating redirect to fundraising expert...");
+            try {
+                await redirectToFundraisingExpert(openAiWs.callSid);
+                console.log("Redirect completed successfully");
+                
+                // Reset booking state after successful redirect
+                openAiWs.bookingState = 'idle';
+                await updateBookingStateWithRetry(openAiWs.phoneNumber, 'idle');
+                
+                // Send confirmation message
+                openAiWs.send(JSON.stringify({
+                    type: "response.create",
+                    response: {
+                        modalities: ["text", "audio"],
+                        instructions: "Great! I'm connecting you with our investment expert now.",
+                        voice: VOICE,
+                        temperature: 0.7,
+                        max_output_tokens: 150,
+                    },
+                }));
+            } catch (error) {
+                console.error("Error during redirect:", error);
+                // Send fallback message if redirect fails
+                openAiWs.send(JSON.stringify({
+                    type: "response.create",
+                    response: {
+                        modalities: ["text", "audio"],
+                        instructions: "I apologize, but I'm having trouble connecting you to our investment expert. Please try again in a moment.",
+                        voice: VOICE,
+                        temperature: 0.7,
+                        max_output_tokens: 150,
+                    },
+                }));
+            }
+        } else {
+            console.error("No callSid available for redirect");
+            openAiWs.send(JSON.stringify({
+                type: "response.create",
+                response: {
+                    modalities: ["text", "audio"],
+                    instructions: "I apologize, but I'm having trouble connecting you to our investment expert. Please try again in a moment.",
+                    voice: VOICE,
+                    temperature: 0.7,
+                    max_output_tokens: 150,
+                },
+            }));
+        }
+    } catch (error) {
+        console.error("Error in handleInvestmentQuery:", error);
+        // Send error message to user
+        openAiWs.send(JSON.stringify({
+            type: "response.create",
+            response: {
+                modalities: ["text", "audio"],
+                instructions: "I apologize, but I encountered an error while processing your investment inquiry. Please try again.",
+                voice: VOICE,
+                temperature: 0.7,
+                max_output_tokens: 150,
+            },
+        }));
+    }
+}
+
