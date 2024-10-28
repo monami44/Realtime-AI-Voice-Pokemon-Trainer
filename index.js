@@ -629,17 +629,52 @@ async function handleOpenAiMessage(openAiWs, data, connection, streamSid) {
 
             if (functionName === "access_long_term_memory") {
                 const functionArgs = JSON.parse(response.arguments);
-                const userQuery = functionArgs.query;
-
-                const memories = await getRelevantLongTermMemory(openAiWs.phoneNumber, userQuery);
-                if (memories.length > 0) {
-                    const memoryContent = memories.join(' ');
+                const query = functionArgs.query;
+                
+                console.log("Accessing long-term memory for query:", query);
+                
+                const memories = await getRelevantLongTermMemory(openAiWs.phoneNumber, query);
+                
+                if (memories && memories.length > 0) {
+                    // Send memories back to AI as function call output
                     openAiWs.send(JSON.stringify({
                         type: "conversation.item.create",
                         item: {
                             type: "function_call_output",
-                            output: memoryContent,
+                            output: JSON.stringify({ memories: memories }),
+                        },
+                    }));
+
+                    // Let AI process the memories and respond
+                    openAiWs.send(JSON.stringify({
+                        type: "response.create",
+                        response: {
                             modalities: ["text", "audio"],
+                            instructions: `Based on the retrieved memories: ${memories.join('. ')}, provide a natural response to the user's question about their information. If no relevant information was found, politely inform the user and ask for the information.`,
+                            voice: VOICE,
+                            temperature: 0.7,
+                            max_output_tokens: 150,
+                        },
+                    }));
+                } else {
+                    // If no memories found, let AI handle the empty response
+                    openAiWs.send(JSON.stringify({
+                        type: "conversation.item.create",
+                        item: {
+                            type: "function_call_output",
+                            output: JSON.stringify({ memories: [] }),
+                        },
+                    }));
+
+                    // Let AI handle the case where no memories were found
+                    openAiWs.send(JSON.stringify({
+                        type: "response.create",
+                        response: {
+                            modalities: ["text", "audio"],
+                            instructions: "No memories were found. Please provide a polite response asking the user for this information.",
+                            voice: VOICE,
+                            temperature: 0.7,
+                            max_output_tokens: 150,
                         },
                     }));
                 }
@@ -1648,19 +1683,46 @@ function isRelevantTopic(text) {
 
 async function getRelevantLongTermMemory(phoneNumber, query) {
     try {
-        const { data, error } = await supabase
-            .from('long_term_memory')
-            .select('context')  // Changed from 'content' to 'context'
-            .eq('user_phone_number', phoneNumber)
-            .textSearch('context', query)  // Changed from 'content' to 'context'
-            .limit(3);
+        // Generate embedding for the query
+        const embeddingResponse = await fetch("https://api.openai.com/v1/embeddings", {
+            method: "POST",
+            headers: {
+                "Content-Type": "application/json",
+                "Authorization": `Bearer ${process.env.OPENAI_API_KEY}`,
+            },
+            body: JSON.stringify({
+                input: query,
+                model: "text-embedding-ada-002",
+            }),
+        });
+
+        if (!embeddingResponse.ok) {
+            console.error("Error fetching embedding from OpenAI:", embeddingResponse.statusText);
+            return [];
+        }
+
+        const embeddingData = await embeddingResponse.json();
+        const queryEmbedding = embeddingData.data[0].embedding;
+
+        // Search memories using embedding similarity
+        const { data, error } = await supabase.rpc(
+            'search_long_term_memory',
+            {
+                query_embedding: queryEmbedding,
+                user_phone: phoneNumber,
+                match_threshold: 0.5, // Adjust this threshold as needed
+                match_count: 3
+            }
+        );
 
         if (error) {
             console.error('Error retrieving long-term memory:', error);
             return [];
         }
 
-        return data.map(item => item.context);  // Changed from 'content' to 'context'
+        // Return only the context strings, sorted by similarity
+        return data.map(item => item.context);
+
     } catch (error) {
         console.error('Error in getRelevantLongTermMemory:', error);
         return [];
