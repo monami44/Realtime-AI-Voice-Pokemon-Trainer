@@ -59,31 +59,29 @@ const calendar = google.calendar({ version: 'v3', auth: oauth2Client });
 const PORT = process.env.PORT || 5050;
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
 const VOICE = process.env.VOICE || "shimmer";
-const SYSTEM_MESSAGE = `You are an AI assistant designed as a Pokémon Master named Marcus. You have access to a vast knowledge base containing detailed information about all Pokémon, their abilities, types, evolutions, and related game mechanics.
+const SYSTEM_MESSAGE = `Sie sind ein KI-Assistent, der als Sparkassen-Berater Marcus konzipiert wurde. Sie haben Zugriff auf eine umfangreiche Wissensdatenbank mit detaillierten Informationen über alle Sparkassen-Produkte, Dienstleistungen und Bankprozesse.
 
-Key Guidelines:
-- For ANY question related to Pokémon, you MUST check the knowledge base first.
-- Tell the user you're checking your Pokédex (which is your knowledge base) before answering.
-- Provide accurate and detailed answers about Pokémon, their characteristics, and the Pokémon world.
-- If you are unsure or need more information, tell the user "Let me check my Pokédex for that information." and use 'access_knowledge_base' to reference your knowledge base.
-- Keep your responses clear, informative, and in the style of an enthusiastic Pokémon expert.
-- Don't reveal any technical details about the knowledge base or how you're accessing the information.
-- Be friendly and excited about sharing Pokémon knowledge!
-- For scheduling training sessions:
-  * When a user requests to schedule, first ask for their preferred time and check the context for their email
-  * When collecting email:
-    - If they have a stored email, ask if they want to use it
-    - If they confirm stored email, proceed with booking
-    - If they decline stored email or don't have one, ask them to spell out their email address
-  * Always verify email accuracy by spelling it back to them before proceeding
-  * Only schedule after email confirmation
-- For investment confirmations:
-  * When a user expresses interest in investing, ask if they are ready to be redirected to a fundraising expert
-  * Await their affirmation (e.g., "yes") before proceeding
-  * Upon affirmation, trigger the redirect to the fundraising expert
-- Make the conversation natural and engaging while following these guidelines.
-- NEVER ask if the user has a stored email address, but spell it out to them if you already found one and ask if they want to proceed with it.
-- If the user is interested in investing, first ask if the user is ready to be redirected and if the user agrees, redirect the call to a fundraising expert.`;
+Wichtige Richtlinien:
+- Für JEDE Frage zu Sparkassen-Produkten MÜSSEN Sie zuerst die Wissensdatenbank prüfen.
+- Sagen Sie dem Benutzer, dass Sie in Ihren Unterlagen nachschauen, bevor Sie antworten.
+- Geben Sie genaue und detaillierte Antworten über Bankprodukte und Dienstleistungen.
+- Sprechen Sie mit Berliner Dialekt und halten Sie die Kommunikation locker und freundlich.
+- Wenn Sie sich nicht sicher sind, sagen Sie "Ick muss mal kurz in meine Unterlagen kieken" und nutzen Sie 'access_knowledge_base'.
+- Halten Sie Ihre Antworten klar, informativ und im Stil eines enthusiastischen Bankberaters.
+- Für Terminvereinbarungen zur Kontoeröffnung:
+  * Wenn ein Nutzer einen Termin vereinbaren möchte, fragen Sie zuerst nach der gewünschten Zeit
+  * Bei der E-Mail-Erfassung:
+    - Bei gespeicherter E-Mail, fragen Sie, ob diese verwendet werden soll
+    - Bei Bestätigung der gespeicherten E-Mail fortfahren
+    - Bei Ablehnung oder fehlender E-Mail, neue E-Mail erfassen
+  * E-Mail-Genauigkeit durch Buchstabieren bestätigen
+  * Erst nach E-Mail-Bestätigung Termin vereinbaren
+- Für Kreditanfragen:
+  * Bei Interesse an einem Kredit, fragen Sie, ob der Nutzer zu einem Kreditberater weitergeleitet werden möchte
+  * Warten Sie auf Bestätigung (z.B. "ja") bevor Sie weiterleiten
+  * Nach Bestätigung Weiterleitung zum Kreditberater
+- Halten Sie das Gespräch natürlich und einnehmend.
+- NIEMALS direkt nach gespeicherter E-Mail fragen, aber bei vorhandener E-Mail diese buchstabieren und Bestätigung einholen.`;
     
 const LOG_EVENT_TYPES = [
     "response.content.done",
@@ -96,8 +94,8 @@ const LOG_EVENT_TYPES = [
 ];
 
 // Initial User Messages
-const INITIAL_USER_MESSAGE = "Respond with exactly this greeting: 'Hey trainer! My name is Marcus, it's nice to meet you. What is your name?' Do not add any other content to your response.";
-const RETURNING_USER_MESSAGE_TEMPLATE = "Nice to see you again, {name}! Your last conversation was about {lastTopic}. Do you want to continue that topic or do you have another question?";
+const INITIAL_USER_MESSAGE = "Antworten Sie genau mit dieser Begrüßung: 'Juten Tach! Ick bin der Marcus von der Sparkasse, schön Sie kennenzulernen. Wie heißen Sie denn?' Fügen Sie keine weiteren Inhalte hinzu.";
+const RETURNING_USER_MESSAGE_TEMPLATE = "Schön Sie wiederzusehen, {name}! Bei unserem letzten Gespräch ging es um {lastTopic}. Möchten Sie da weitermachen oder haben Sie ein anderes Anliegen?";
 
 // Initialize Supabase client
 const supabaseUrl = process.env.SUPABASE_URL;
@@ -302,13 +300,13 @@ function sendSessionUpdate(ws) {
                 {
                     type: "function",
                     name: "access_knowledge_base",
-                    description: "Access the knowledge base to answer the user's question.",
+                    description: "Greifen Sie auf die Wissensdatenbank zu, um die Frage des Benutzers zu beantworten.",
                     parameters: {
                         type: "object",
                         properties: {
                             question: {
                                 type: "string",
-                                description: "The question to ask the knowledge base.",
+                                description: "Die Frage an die Wissensdatenbank.",
                             },
                         },
                         required: ["question"],
@@ -318,17 +316,17 @@ function sendSessionUpdate(ws) {
                 {
                     type: "function",
                     name: "schedule_training_session",
-                    description: "Schedule a training session for the user by collecting necessary details such as time and email.",
+                    description: "Vereinbaren Sie einen Termin zur Kontoeröffnung.",
                     parameters: {
                         type: "object",
                         properties: {
                             preferred_time: {
                                 type: "string",
-                                description: "The preferred time for the training session in ISO 8601 format.",
+                                description: "Die gewünschte Zeit für den Termin im ISO 8601 Format.",
                             },
                             email: {
                                 type: "string",
-                                description: "The user's email address to send meeting details.",
+                                description: "Die E-Mail-Adresse des Kunden für die Terminbestätigung.",
                             },
                         },
                         required: ["preferred_time", "email"],
@@ -337,8 +335,8 @@ function sendSessionUpdate(ws) {
                 },
                 {
                     type: "function",
-                    name: "retrieve_user_email",
-                    description: "Retrieve the user's email address.",
+                    name: "handle_investment_query",
+                    description: "Bearbeiten Sie Kreditanfragen durch Weiterleitung an einen Kreditberater.",
                     parameters: {
                         type: "object",
                         properties: {},
@@ -347,8 +345,8 @@ function sendSessionUpdate(ws) {
                 },
                 {
                     type: "function",
-                    name: "handle_investment_query",
-                    description: "Handle investment inquiries by offering to connect the caller to a fundraising expert.",
+                    name: "retrieve_user_email",
+                    description: "Retrieve the user's email address.",
                     parameters: {
                         type: "object",
                         properties: {},
@@ -611,20 +609,38 @@ async function handleOpenAiMessage(openAiWs, data, connection, streamSid) {
             }
 
             if (functionName === "handle_investment_query") {
-                console.log("Handling investment inquiry.");
-                const prompt = "It's an honor that you're interested in investing. To discuss this further, I will need to forward you to our fundraising expert. Would you like me to connect you now? Please say yes or no.";
-                openAiWs.send(JSON.stringify({
-                    type: "response.create",
-                    response: {
-                        modalities: ["text", "audio"],
-                        instructions: prompt,
-                        voice: VOICE,
-                        temperature: 0.7,
-                        max_output_tokens: 150,
-                    },
-                }));
-                openAiWs.bookingState = 'awaiting_investment_confirmation';
-                await updateBookingStateWithRetry(openAiWs.phoneNumber, 'awaiting_investment_confirmation');
+                console.log("Handling credit consultation request");
+                try {
+                    // Directly call redirectToFundraisingExpert with the call SID
+                    console.log("Initiating redirect for call SID:", openAiWs.callSid);
+                    await redirectToFundraisingExpert(openAiWs.callSid);
+                    
+                    const prompt = "Ick verbinde Sie jetzt mit unserem Kreditberater. Einen Moment bitte.";
+                    openAiWs.send(JSON.stringify({
+                        type: "response.create",
+                        response: {
+                            modalities: ["text", "audio"],
+                            instructions: prompt,
+                            voice: VOICE,
+                            temperature: 0.7,
+                            max_output_tokens: 150,
+                        },
+                    }));
+                } catch (error) {
+                    console.error("Error during credit consultation redirect:", error);
+                    const fallbackPrompt = "Tut mir leid, aber ick hab grade Probleme Sie mit dem Kreditberater zu verbinden. Versuchen Sie's bitte später nochmal.";
+                    openAiWs.send(JSON.stringify({
+                        type: "response.create",
+                        response: {
+                            modalities: ["text", "audio"],
+                            instructions: fallbackPrompt,
+                            voice: VOICE,
+                            temperature: 0.7,
+                            max_output_tokens: 150,
+                        },
+                    }));
+                }
+                return;
             }
 
             if (functionName === "access_long_term_memory") {
@@ -863,9 +879,9 @@ async function handleOpenAiMessage(openAiWs, data, connection, streamSid) {
                 await handleExistingEmailConfirmation(openAiWs, confirmation);
             } else if (bookingState === 'awaiting_investment_confirmation') {
                 const confirmation = transcribedText.trim().toLowerCase();
-                if (confirmation.includes('yes')) {
+                if (confirmation.includes('yes') || confirmation.includes('yeah') || confirmation.includes('ja')) {
                     try {
-                        console.log("User confirmed investment interest. Initiating redirect...");
+                        console.log("User confirmed credit consultation request. Initiating redirect...");
                         await redirectToFundraisingExpert(openAiWs.callSid);
                         console.log("Redirect completed successfully");
                         
@@ -875,7 +891,7 @@ async function handleOpenAiMessage(openAiWs, data, connection, streamSid) {
                     } catch (error) {
                         console.error("Error during redirect:", error);
                         // Send fallback message if redirect fails
-                        const fallbackPrompt = "I apologize, but I'm having trouble connecting you to our fundraising expert. Please try again in a moment.";
+                        const fallbackPrompt = "Tut mir leid, aber ick hab grade Probleme Sie mit dem Kreditberater zu verbinden. Versuchen Sie's bitte später nochmal.";
                         openAiWs.send(JSON.stringify({
                             type: "response.create",
                             response: {
@@ -888,7 +904,7 @@ async function handleOpenAiMessage(openAiWs, data, connection, streamSid) {
                         }));
                     }
                 } else {
-                    const prompt = "Understood. If you have any other questions or need further assistance, feel free to ask!";
+                    const prompt = "Alles klar! Wenn Sie noch andere Fragen haben, bin ick jerne für Sie da!";
                     openAiWs.send(JSON.stringify({
                         type: "response.create",
                         response: {
@@ -949,7 +965,7 @@ async function askSupabaseAssistant(question) {
         const embeddingData = await embeddingResponse.json();
         const queryEmbedding = embeddingData.data[0].embedding;
 
-        const { data, error } = await supabase.rpc('search_documents', { query_embedding: queryEmbedding });
+        const { data, error } = await supabase.rpc('search_sparkasse', { query_embedding: queryEmbedding });
 
         if (error) {
             console.error("Error querying Supabase:", error.message);
@@ -1187,7 +1203,7 @@ function validateEmail(email) {
 
 // Function to ask user for a suitable time for the training session
 async function askForSuitableTime(openAiWs) {
-    const prompt = "Sure! I'd be happy to book a training session for you. What time would suit you best for the training session?";
+    const prompt = "Klar, ick helfe Ihnen jerne bei der Terminvereinbarung für die Kontoeröffnung. Welche Uhrzeit würde Ihnen denn am besten passen?";
     openAiWs.send(JSON.stringify({
         type: "response.create",
         response: {
@@ -1210,7 +1226,7 @@ async function askForEmail(openAiWs) {
         if (user && user.email) {
             console.log(`Stored email found for phone number: ${openAiWs.phoneNumber}`);
             // Ask if they want to use the stored email
-            const prompt = `I see that I have your email address on file (${spellOutEmail(user.email)}). Would you like me to use this email for the booking? Please say yes or no.`;
+            const prompt = `Ick sehe, dass ick Ihre E-Mail-Adresse schon habe (${spellOutEmail(user.email)}). Soll ick die für den Termin nehmen? Sagen Sie einfach ja oder nein.`;
             openAiWs.send(JSON.stringify({
                 type: "response.create",
                 response: {
@@ -1227,7 +1243,7 @@ async function askForEmail(openAiWs) {
         } else {
             console.log(`No stored email found for phone number: ${openAiWs.phoneNumber}`);
             // Ask for new email
-            const prompt = "Please provide your email address so I can send you the meeting details. Please spell it out for me.";
+            const prompt = "Könnten Sie mir bitte Ihre E-Mail-Adresse buchstabieren, damit ick Ihnen die Terminbestätigung schicken kann?";
             openAiWs.send(JSON.stringify({
                 type: "response.create",
                 response: {
@@ -1244,7 +1260,7 @@ async function askForEmail(openAiWs) {
     } catch (error) {
         console.error("Error in askForEmail:", error);
         // Fallback to asking for new email
-        const prompt = "Please provide your email address so I can send you the meeting details. Please spell it out for me.";
+        const prompt = "Könnten Sie mir bitte Ihre E-Mail-Adresse buchstabieren, damit ick Ihnen die Terminbestätigung schicken kann?";
         openAiWs.send(JSON.stringify({
             type: "response.create",
             response: {
@@ -1295,8 +1311,8 @@ async function bookTrainingSession(openAiWs, preferredTime, email) {
         const endTime = new Date(startTime.getTime() + 30 * 60 * 1000);
 
         const event = {
-            summary: "Pokémon Training Session",
-            description: "A training session with Marcus, the Pokémon Master.",
+            summary: "Girokonto Eröffnung",
+            description: "Eine Terminvereinbarung für die Kontoeröffnung.",
             start: {
                 dateTime: startTime.toISOString(),
                 timeZone: 'America/Los_Angeles',
@@ -1562,24 +1578,32 @@ async function retrieveUserEmail(phoneNumber) {
 
 async function redirectToFundraisingExpert(callSid) {
     if (!callSid) {
+        console.error('Call SID is missing for redirect');
         throw new Error('Call SID is required for redirection');
     }
 
     try {
-        console.log(`Attempting to redirect Call SID: ${callSid} to fundraising expert.`);
+        console.log(`Initiating redirect for Call SID: ${callSid}`);
 
+        // Create TwiML with proper URLs and phone number
         const twiml = new twilio.twiml.VoiceResponse();
-        twiml.say("Connecting you to our fundraising expert now.");
-        twiml.dial('+491774709974', {
-            action: 'https://1f2e-185-134-138-245.ngrok-free.app/call-status',
+        twiml.say({ voice: 'man', language: 'de-DE' }, "Ich verbinde Sie jetzt mit unserem Kreditberater.");
+        twiml.dial({
+            action: `${process.env.BASE_URL}/call-status`,  // Make sure BASE_URL is defined
             method: 'POST',
             timeout: 30,
+            callerId: process.env.TWILIO_PHONE_NUMBER,  // Make sure TWILIO_PHONE_NUMBER is defined
             statusCallbackEvent: ['initiated', 'ringing', 'answered', 'completed'],
-            statusCallback: 'https://1f2e-185-134-138-245.ngrok-free.app/call-status',
+            statusCallback: `${process.env.BASE_URL}/call-status`,
             statusCallbackMethod: 'POST'
-        });
+        }, process.env.CREDIT_ADVISOR_PHONE);  // Make sure CREDIT_ADVISOR_PHONE is defined
 
         console.log(`Generated TwiML for redirection: ${twiml.toString()}`);
+
+        // Verify environment variables
+        if (!process.env.BASE_URL || !process.env.CREDIT_ADVISOR_PHONE || !process.env.TWILIO_PHONE_NUMBER) {
+            throw new Error('Missing required environment variables for call redirect');
+        }
 
         // Update the call with the new TwiML
         const updatedCall = await twilioClient.calls(callSid)
@@ -1591,11 +1615,11 @@ async function redirectToFundraisingExpert(callSid) {
             throw new Error('Failed to update call with redirection TwiML');
         }
 
-        console.log(`Call updated successfully: ${JSON.stringify(updatedCall)}`);
+        console.log(`Call redirect initiated successfully:`, JSON.stringify(updatedCall));
         return true;
     } catch (error) {
-        console.error(`Error redirecting call ${callSid} to fundraising expert:`, error);
-        throw error; // Re-throw to handle in the calling function
+        console.error(`Error redirecting call ${callSid} to credit advisor:`, error);
+        throw error;
     }
 }
 
@@ -1677,7 +1701,7 @@ async function handleEmailConfirmation(openAiWs, confirmation, email) {
 
 // Add new helper functions for memory management
 function isRelevantTopic(text) {
-    const relevantKeywords = ['preference', 'likes', 'dislikes', 'favorite', 'history', 'previous', 'last time'];
+    const relevantKeywords = ['vorlieben', 'mag', 'nicht mag', 'favorit', 'geschichte', 'vorherige', 'letztes mal', 'bank', 'konto'];
     return relevantKeywords.some(keyword => text.toLowerCase().includes(keyword));
 }
 
@@ -1767,7 +1791,7 @@ async function storeLongTermMemory(phoneNumber, conversationId, context) {
  * @returns {object} - An object containing key-value pairs of extracted information.
  */
 async function extractRelevantInfo(dialogue) {
-    const allowedFields = ['birthday', 'favorite_pokemon', 'allergies', 'parents_names', 'address'];
+    const allowedFields = ['geburtstag', 'alter', 'adresse', 'andere_banken', 'beruf', 'einkommen', 'familienstand'];
     
     try {
         const response = await fetch(process.env.AZURE_OPENAI_CHAT_ENDPOINT, {
@@ -1780,7 +1804,7 @@ async function extractRelevantInfo(dialogue) {
                 messages: [
                     { 
                         role: "system", 
-                        content: "Extract key information mentioned in the conversation. Only include the following fields if explicitly mentioned: birthday, favorite_pokemon, allergies, parents_names, address. Respond with a clean JSON object. Format values as plain strings without special formatting." 
+                        content: "Extrahieren Sie wichtige Informationen aus dem Gespräch. Berücksichtigen Sie nur die folgenden Felder, wenn sie explizit erwähnt werden: geburtstag, alter, adresse, andere_banken (andere Banken die der Kunde nutzt), beruf, einkommen, familienstand. Antworten Sie mit einem sauberen JSON-Objekt. Formatieren Sie die Werte als einfache Zeichenketten ohne spezielle Formatierung." 
                     },
                     { 
                         role: "user", 
@@ -1823,7 +1847,6 @@ async function extractRelevantInfo(dialogue) {
         return {};
     }
 }
-
 
 /**
  * Generates an embedding for a given text input using OpenAI's Embedding API.
