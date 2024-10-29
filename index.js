@@ -69,6 +69,7 @@ Key Guidelines:
 - Keep your responses clear, informative, and in the style of an enthusiastic Pokémon expert.
 - Don't reveal any technical details about the knowledge base or how you're accessing the information.
 - Be friendly and excited about sharing Pokémon knowledge!
+
 - For scheduling training sessions:
   * When a user requests to schedule, first ask for their preferred time and check the context for their email
   * When collecting email:
@@ -77,13 +78,20 @@ Key Guidelines:
     - If they decline stored email or don't have one, ask them to spell out their email address
   * Always verify email accuracy by spelling it back to them before proceeding
   * Only schedule after email confirmation
+
 - For investment confirmations:
   * When a user expresses interest in investing, ask if they are ready to be redirected to a fundraising expert
   * Await their affirmation (e.g., "yes") before proceeding
   * Upon affirmation, trigger the redirect to the fundraising expert
+  * **Do not call 'handle_investment_query' function during confirmation phase**
+
 - Make the conversation natural and engaging while following these guidelines.
 - NEVER ask if the user has a stored email address, but spell it out to them if you already found one and ask if they want to proceed with it.
-- If the user is interested in investing, first ask if the user is ready to be redirected and if the user agrees, redirect the call to a fundraising expert.`;
+- If the user is interested in investing, first ask if the user is ready to be redirected and if the user agrees, redirect the call to a fundraising expert.
+- When confirming the user's email address, repeat it back to them and ask for confirmation.
+- Only trigger email retrieval and confirmation when scheduling a training session.
+- When handling investment confirmations, ask for user affirmation before redirecting to a fundraising expert.
+`;
     
 const LOG_EVENT_TYPES = [
     "response.content.done",
@@ -431,6 +439,12 @@ async function handleOpenAiMessage(openAiWs, data, connection, streamSid) {
 
             const functionName = response.name;
 
+            // Block unwanted function calls based on state
+            if (openAiWs.bookingState === 'awaiting_investment_confirmation' && functionName === "handle_investment_query") {
+                console.warn("Ignoring 'handle_investment_query' call during 'awaiting_investment_confirmation' state.");
+                return;
+            }
+
             if (functionName === "access_knowledge_base") {
                 // Existing logic for accessing knowledge base
                 const functionArgs = JSON.parse(response.arguments);
@@ -612,7 +626,7 @@ async function handleOpenAiMessage(openAiWs, data, connection, streamSid) {
 
             if (functionName === "handle_investment_query") {
                 console.log("Handling investment inquiry.");
-                const prompt = "It's an honor that you're interested in investing. To discuss this further, I will need to forward you to our fundraising expert. Would you like me to connect you now? Please say yes or no.";
+                const prompt = "It's an honor that you're interested in investing. To discuss this further, I will need to forward you to our fundraising expert. Would you like me to connect you now?";
                 openAiWs.send(JSON.stringify({
                     type: "response.create",
                     response: {
@@ -735,27 +749,9 @@ async function handleOpenAiMessage(openAiWs, data, connection, streamSid) {
                     const email = openAiWs.email;
                     await handleEmailConfirmation(openAiWs, confirmation, email);
                 } else if (bookingState === 'awaiting_investment_confirmation') {
-                    // Handle investment confirmation
                     const confirmation = response.content.trim().toLowerCase();
-                    if (confirmation.includes('yes')) {
-                        await redirectToFundraisingExpert(openAiWs.callSid);
-                        openAiWs.bookingState = 'idle';
-                        await updateBookingStateWithRetry(openAiWs.phoneNumber, 'idle');
-                    } else {
-                        const prompt = "Understood. If you have any other questions or need further assistance, feel free to ask!";
-                        openAiWs.send(JSON.stringify({
-                            type: "response.create",
-                            response: {
-                                modalities: ["text", "audio"],
-                                instructions: prompt,
-                                voice: VOICE,
-                                temperature: 0.7,
-                                max_output_tokens: 150,
-                            },
-                        }));
-                        openAiWs.bookingState = 'idle';
-                        await updateBookingStateWithRetry(openAiWs.phoneNumber, 'idle');
-                    }
+                    console.log(`Investment confirmation handling: Received confirmation="${confirmation}"`);
+                    await process_investment_confirmation(openAiWs, confirmation);
                 }
             } else {
                 console.log("Skipping appending AI function call output to fullDialogue");
@@ -1044,21 +1040,27 @@ async function handleIncomingCall(callSid, openAiWs) {
 
         console.log(`Handling incoming call from ${phoneNumber} with Call SID: ${callSid}`);
 
-        // Get last conversation for context
+        // Get last conversation for context, excluding finalized ones
         const lastConversation = await getLastConversationWithRetry(phoneNumber);
         console.log("Last conversation data:", lastConversation);
         console.log("User details:", user);
 
         let prompt;
         if (user.name) {
-            const lastTopic = lastConversation?.summary 
-                ? summarizeLastTopic(lastConversation.summary)  // New helper function
-                : "our introduction";
-            
-            prompt = RETURNING_USER_MESSAGE_TEMPLATE
-                .replace('{name}', user.name)
-                .replace('{lastTopic}', lastTopic);
-            console.log("Generated returning user prompt:", prompt);
+            // Check if the last conversation is finalized
+            if (lastConversation && lastConversation.booking_state !== 'idle') {
+                const lastTopic = lastConversation?.summary 
+                    ? summarizeLastTopic(lastConversation.summary)
+                    : "our introduction";
+                
+                prompt = RETURNING_USER_MESSAGE_TEMPLATE
+                    .replace('{name}', user.name)
+                    .replace('{lastTopic}', lastTopic);
+            } else {
+                // Conversation is finalized or no relevant last conversation
+                prompt = "Hello! Welcome back. How can I assist you today?";
+            }
+            console.log("Generated prompt:", prompt);
             sendUserMessage(openAiWs, prompt, true);
         } else {
             prompt = NEW_USER_PROMPT;
@@ -1562,47 +1564,69 @@ async function retrieveUserEmail(phoneNumber) {
 
 async function redirectToFundraisingExpert(callSid) {
     if (!callSid) {
+        console.error('redirectToFundraisingExpert: Call SID is missing.');
         throw new Error('Call SID is required for redirection');
     }
 
     try {
-        console.log(`Attempting to redirect Call SID: ${callSid} to fundraising expert.`);
+        console.log(`redirectToFundraisingExpert: Initiating redirect for Call SID: ${callSid}`);
 
         const twiml = new twilio.twiml.VoiceResponse();
-        twiml.say("Connecting you to our fundraising expert now.");
-        twiml.dial('+491774709974', {
+        twiml.say({
+            voice: 'alice'
+        }, "Connecting you to our fundraising expert now.");
+        
+        twiml.dial({
             action: 'https://1f2e-185-134-138-245.ngrok-free.app/call-status',
             method: 'POST',
             timeout: 30,
             statusCallbackEvent: ['initiated', 'ringing', 'answered', 'completed'],
             statusCallback: 'https://1f2e-185-134-138-245.ngrok-free.app/call-status',
             statusCallbackMethod: 'POST'
-        });
+        }, '+491774709974');
 
-        console.log(`Generated TwiML for redirection: ${twiml.toString()}`);
+        const twimlString = twiml.toString();
+        console.log(`redirectToFundraisingExpert: Generated TwiML: ${twimlString}`);
 
-        // Update the call with the new TwiML
         const updatedCall = await twilioClient.calls(callSid)
             .update({
-                twiml: twiml.toString()
+                twiml: twimlString
             });
 
         if (!updatedCall) {
             throw new Error('Failed to update call with redirection TwiML');
         }
 
-        console.log(`Call updated successfully: ${JSON.stringify(updatedCall)}`);
+        console.log(`redirectToFundraisingExpert: Call updated successfully:`, updatedCall);
+
+        // Finalize conversation immediately after redirection
+        const conversationId = openAiWs.conversationId;
+        if (conversationId) {
+            await finalizeConversationInDbWithRetry(
+                conversationId,
+                openAiWs.fullDialogue,
+                "User was redirected to a fundraising expert."
+            );
+            console.log("Conversation finalized after redirection.");
+        }
+
         return true;
     } catch (error) {
-        console.error(`Error redirecting call ${callSid} to fundraising expert:`, error);
-        throw error; // Re-throw to handle in the calling function
+        console.error(`redirectToFundraisingExpert: Error:`, error);
+        throw error;
     }
 }
 
 fastifyInstance.post('/call-status', async (request, reply) => {
     const callStatus = request.body.CallStatus;
     const callSid = request.body.CallSid;
-    console.log(`Call SID: ${callSid} Status: ${callStatus}`);
+    console.log(`Call Status Update - SID: ${callSid}, Status: ${callStatus}`);
+    
+    // Log additional details if available
+    if (request.body.ErrorCode) {
+        console.error(`Call Error - Code: ${request.body.ErrorCode}, Message: ${request.body.ErrorMessage}`);
+    }
+    
     reply.sendStatus(200);
 });
 
@@ -1854,5 +1878,104 @@ export async function generateEmbedding(text) {
     } catch (error) {
         console.error("Error in generateEmbedding:", error);
         return null;
+    }
+}
+
+function isAffirmative(confirmation) {
+    console.log(`isAffirmative: Processing confirmation="${confirmation}"`);
+    
+    const affirmativePatterns = [
+        /\byes\b/i,
+        /\bsure\b/i,
+        /\byeah\b/i,
+        /\babsolutely\b/i,
+        /\bplease do\b/i,
+        /\bof course\b/i,
+        /\bredirect me\b/i,
+        /\bconnect me\b/i,
+        /\bok(ay)?\b/i,
+        /\bfine\b/i,
+        /\bgo ahead\b/i
+    ];
+
+    const matched = affirmativePatterns.some(pattern => {
+        const isMatch = pattern.test(confirmation);
+        if (isMatch) {
+            console.log(`isAffirmative: Matched pattern ${pattern}`);
+        }
+        return isMatch;
+    });
+
+    console.log(`isAffirmative: Final result=${matched}`);
+    return matched;
+}
+
+// Add new process_investment_confirmation function
+async function process_investment_confirmation(openAiWs, confirmation) {
+    console.log(`Processing investment confirmation. Confirmation: "${confirmation}"`);
+    
+    if (isAffirmative(confirmation)) {
+        console.log("Affirmative confirmation detected. Initiating redirection.");
+        try {
+            await redirectToFundraisingExpert(openAiWs.callSid);
+            console.log("Redirection successful.");
+
+            openAiWs.bookingState = 'idle';
+            console.log(`Booking state updated to 'idle' for ${openAiWs.phoneNumber}`);
+            await updateBookingStateWithRetry(openAiWs.phoneNumber, 'idle');
+
+            const successPrompt = "Thank you for your interest! I'm connecting you to our fundraising expert now. Please hold on for a moment.";
+            openAiWs.send(JSON.stringify({
+                type: "response.create",
+                response: {
+                    modalities: ["text", "audio"],
+                    instructions: successPrompt,
+                    voice: VOICE,
+                    temperature: 0.7,
+                    max_output_tokens: 150,
+                },
+            }));
+
+            openAiWs.fullDialogue += `AI: ${successPrompt}\n`;
+            console.log("Success prompt sent to user.");
+            
+            // Finalize conversation immediately
+            await finalizeConversation(openAiWs);
+            console.log("Conversation finalized after successful redirection.");
+            
+        } catch (error) {
+            console.error("Failed to redirect to fundraising expert:", error);
+            
+            const errorPrompt = "I apologize, but I'm having trouble connecting you to our fundraising expert. Please try again in a moment.";
+            openAiWs.send(JSON.stringify({
+                type: "response.create",
+                response: {
+                    modalities: ["text", "audio"],
+                    instructions: errorPrompt,
+                    voice: VOICE,
+                    temperature: 0.7,
+                    max_output_tokens: 150,
+                },
+            }));
+            openAiWs.fullDialogue += `AI: ${errorPrompt}\n`;
+            console.log("Redirection failed. Error prompt sent to user.");
+        }
+    } else {
+        console.log("Non-affirmative confirmation detected.");
+        const prompt = "Understood. If you have any other questions or need further assistance, feel free to ask!";
+        openAiWs.send(JSON.stringify({
+            type: "response.create",
+            response: {
+                modalities: ["text", "audio"],
+                instructions: prompt,
+                voice: VOICE,
+                temperature: 0.7,
+                max_output_tokens: 150,
+            },
+        }));
+        openAiWs.bookingState = 'idle';
+        await updateBookingStateWithRetry(openAiWs.phoneNumber, 'idle');
+        openAiWs.fullDialogue += `AI: ${prompt}\n`;
+        console.log("Non-affirmative response handled and state reset.");
     }
 }
