@@ -1577,11 +1577,11 @@ async function redirectToFundraisingExpert(callSid) {
         }, "Connecting you to our fundraising expert now.");
         
         twiml.dial({
-            action: 'https://1f2e-185-134-138-245.ngrok-free.app/call-status',
+            action: 'https://5e1b-185-134-138-229.ngrok-free.app/call-status',
             method: 'POST',
             timeout: 30,
             statusCallbackEvent: ['initiated', 'ringing', 'answered', 'completed'],
-            statusCallback: 'https://1f2e-185-134-138-245.ngrok-free.app/call-status',
+            statusCallback: 'https://5e1b-185-134-138-229.ngrok-free.app/call-status',
             statusCallbackMethod: 'POST'
         }, '+491774709974');
 
