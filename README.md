@@ -13,12 +13,26 @@ A sophisticated AI assistant system featuring booking management, investment han
   - [Data Collection Logic](#data-collection-logic)
   - [Long-Term Memory Flow](#long-term-memory-flow)
 - [Core Components](#core-components)
+  - [Booking System](#booking-system)
+  - [Investment Handling](#investment-handling)
+  - [Long-Term Memory System](#long-term-memory-system)
+- [Database Setup](#database-setup)
 - [Setup and Installation](#setup-and-installation)
+  - [Prerequisites](#prerequisites)
+  - [Installation Steps](#installation-steps)
 - [Environment Variables](#environment-variables)
 - [API Documentation](#api-documentation)
+  - [Conversation Endpoints](#conversation-endpoints)
+  - [Booking Endpoints](#booking-endpoints)
+  - [Investment Endpoints](#investment-endpoints)
 - [Development](#development)
+  - [Local Development](#local-development)
+  - [Database Migrations](#database-migrations)
 - [Deployment](#deployment)
+  - [Production Deployment](#production-deployment)
+  - [Docker Deployment](#docker-deployment)
 - [Monitoring and Logging](#monitoring-and-logging)
+  - [Log Levels](#log-levels)
 - [Security Considerations](#security-considerations)
 - [Contributing](#contributing)
 - [License](#license)
@@ -674,12 +688,131 @@ export async function extractRelevantInfo(dialogue) {
 
 This system ensures that personalized information is effectively captured and stored, enabling the AI to provide contextually aware and personalized responses in future interactions.
 
+## Database Setup
+
+All SQL scripts required for Supabase setup are provided in the `src/database/SQL` directory. These scripts include:
+
+- **[table-setup.sql](src/database/SQL/table-setup.sql):** Creates necessary tables such as `users`, `long_term_memory`, `bookings`, `conversations`, and `documents`.
+  
+  ```sql
+  -- Create the users table
+  CREATE TABLE users (
+      phone_number TEXT PRIMARY KEY,
+      name TEXT,
+      email TEXT,
+      created_at TIMESTAMPTZ
+  );
+
+  -- Create the long_term_memory table
+  CREATE TABLE long_term_memory (
+      id SERIAL PRIMARY KEY,
+      user_phone_number TEXT REFERENCES users(phone_number),
+      conversation_id TEXT REFERENCES conversations(conversation_id),
+      context TEXT,
+      embedding VECTOR,
+      created_at TIMESTAMPTZ
+  );
+
+  -- Create the bookings table
+  CREATE TABLE bookings (
+      booking_id TEXT PRIMARY KEY,
+      phone_number TEXT REFERENCES users(phone_number),
+      conversation_id TEXT REFERENCES conversations(conversation_id),
+      booking_state TEXT,
+      booking_time TIMESTAMPTZ,
+      booking_email TEXT,
+      created_at TIMESTAMPTZ
+  );
+
+  -- Create the conversations table
+  CREATE TABLE conversations (
+      conversation_id TEXT PRIMARY KEY,
+      phone_number TEXT REFERENCES users(phone_number),
+      full_dialogue TEXT,
+      summary TEXT,
+      start_timestamp TIMESTAMPTZ,
+      end_timestamp TIMESTAMPTZ,
+      last_question TEXT,
+      last_answer TEXT
+  );
+
+  -- Create the documents table
+  CREATE TABLE documents (
+      id SERIAL PRIMARY KEY,
+      context TEXT,
+      embedding VECTOR,
+      metadata JSONB
+  );
+  ```
+
+- **[search-long-term-memory.sql](src/database/SQL/search-long-term-memory.sql):** Function to retrieve similar embeddings from `long_term_memory`.
+
+  ```sql
+  -- Enable the pgvector extension if not already enabled
+  CREATE EXTENSION IF NOT EXISTS vector;
+
+  -- Create the function to retrieve similar embeddings from long_term_memory
+  CREATE OR REPLACE FUNCTION get_user_similar_memory(
+      user_phone TEXT,
+      query_embedding VECTOR,
+      match_threshold FLOAT,
+      match_count INT
+  )
+  RETURNS TABLE (
+      context TEXT,
+      similarity FLOAT
+  ) AS $$
+  BEGIN
+      RETURN QUERY
+      SELECT 
+          ltm.context,
+          1 - (ltm.embedding <=> query_embedding) AS similarity
+      FROM long_term_memory ltm
+      WHERE ltm.user_phone_number = user_phone
+        AND 1 - (ltm.embedding <=> query_embedding) > match_threshold
+      ORDER BY ltm.embedding <=> query_embedding
+      LIMIT match_count;
+  END;
+  $$ LANGUAGE plpgsql;
+  ```
+
+- **[search-documents.sql](src/database/SQL/search-documents.sql):** Function to retrieve the top 5 most similar documents.
+
+  ```sql
+  -- Enable the pgvector extension if not already enabled
+  CREATE EXTENSION IF NOT EXISTS vector;
+
+  -- Create the function to retrieve the top 5 most similar documents
+  CREATE OR REPLACE FUNCTION get_similar_documents(query_embedding VECTOR)
+  RETURNS TABLE (
+      id INT,
+      context TEXT,
+      metadata JSONB,
+      similarity FLOAT
+  ) AS $$
+  BEGIN
+      RETURN QUERY
+      SELECT 
+          documents.id, 
+          documents.context, 
+          documents.metadata,
+          1 - (documents.embedding <=> query_embedding) AS similarity
+      FROM documents
+      WHERE 1 - (documents.embedding <=> query_embedding) > 0.7
+      ORDER BY similarity DESC
+      LIMIT 5;
+  END;
+  $$ LANGUAGE plpgsql;
+  ```
+
+Ensure that you have the `pgvector` extension installed in your PostgreSQL database to enable vector operations.
+
 ## Setup and Installation
 
 ### Prerequisites
 
 - **Node.js** (v16 or higher)
-- **PostgreSQL** with Vector extension
+- **PostgreSQL** with `pgvector` extension
 - **Supabase** account
 - **OpenAI** API access
 - **Azure OpenAI** API access
@@ -921,3 +1054,122 @@ For support, email [support@example.com](mailto:support@example.com) or join our
 - **Supabase:** For database solutions
 - **Azure:** For additional AI capabilities
 - **Google:** For Google Calendar API integration
+
+## SQL Scripts
+
+All SQL scripts required for Supabase setup are provided in the `src/database/SQL` directory. These scripts include:
+
+- **[table-setup.sql](src/database/SQL/table-setup.sql)**
+- **[search-long-term-memory.sql](src/database/SQL/search-long-term-memory.sql)**
+- **[search-documents.sql](src/database/SQL/search-documents.sql)**
+
+These scripts create the necessary database schema and functions needed for the system to operate effectively.
+
+```sql:src/database/SQL/table-setup.sql
+-- Create the users table
+CREATE TABLE users (
+    phone_number TEXT PRIMARY KEY,
+    name TEXT,
+    email TEXT,
+    created_at TIMESTAMPTZ
+);
+
+-- Create the long_term_memory table
+CREATE TABLE long_term_memory (
+    id SERIAL PRIMARY KEY,
+    user_phone_number TEXT REFERENCES users(phone_number),
+    conversation_id TEXT REFERENCES conversations(conversation_id),
+    context TEXT,
+    embedding VECTOR,
+    created_at TIMESTAMPTZ
+);
+
+-- Create the bookings table
+CREATE TABLE bookings (
+    booking_id TEXT PRIMARY KEY,
+    phone_number TEXT REFERENCES users(phone_number),
+    conversation_id TEXT REFERENCES conversations(conversation_id),
+    booking_state TEXT,
+    booking_time TIMESTAMPTZ,
+    booking_email TEXT,
+    created_at TIMESTAMPTZ
+);
+
+-- Create the conversations table
+CREATE TABLE conversations (
+    conversation_id TEXT PRIMARY KEY,
+    phone_number TEXT REFERENCES users(phone_number),
+    full_dialogue TEXT,
+    summary TEXT,
+    start_timestamp TIMESTAMPTZ,
+    end_timestamp TIMESTAMPTZ,
+    last_question TEXT,
+    last_answer TEXT
+);
+
+-- Create the documents table
+CREATE TABLE documents (
+    id SERIAL PRIMARY KEY,
+    context TEXT,
+    embedding VECTOR,
+    metadata JSONB
+);
+```
+
+```sql:src/database/SQL/search-long-term-memory.sql
+-- Enable the pgvector extension if not already enabled
+CREATE EXTENSION IF NOT EXISTS vector;
+
+-- Create the function to retrieve similar embeddings from long_term_memory
+CREATE OR REPLACE FUNCTION get_user_similar_memory(
+    user_phone TEXT,
+    query_embedding VECTOR,
+    match_threshold FLOAT,
+    match_count INT
+)
+RETURNS TABLE (
+    context TEXT,
+    similarity FLOAT
+) AS $$
+BEGIN
+    RETURN QUERY
+    SELECT 
+        ltm.context,
+        1 - (ltm.embedding <=> query_embedding) AS similarity
+    FROM long_term_memory ltm
+    WHERE ltm.user_phone_number = user_phone
+      AND 1 - (ltm.embedding <=> query_embedding) > match_threshold
+    ORDER BY ltm.embedding <=> query_embedding
+    LIMIT match_count;
+END;
+$$ LANGUAGE plpgsql;
+```
+
+```sql:src/database/SQL/search-documents.sql
+-- Enable the pgvector extension if not already enabled
+CREATE EXTENSION IF NOT EXISTS vector;
+
+-- Create the function to retrieve the top 5 most similar documents
+CREATE OR REPLACE FUNCTION get_similar_documents(query_embedding VECTOR)
+RETURNS TABLE (
+    id INT,
+    context TEXT,
+    metadata JSONB,
+    similarity FLOAT
+) AS $$
+BEGIN
+    RETURN QUERY
+    SELECT 
+        documents.id, 
+        documents.context, 
+        documents.metadata,
+        1 - (documents.embedding <=> query_embedding) AS similarity
+    FROM documents
+    WHERE 1 - (documents.embedding <=> query_embedding) > 0.7
+    ORDER BY similarity DESC
+    LIMIT 5;
+END;
+$$ LANGUAGE plpgsql;
+```
+
+These scripts should be executed in your Supabase PostgreSQL database to set up the necessary tables and functions for the AI Assistant System.
