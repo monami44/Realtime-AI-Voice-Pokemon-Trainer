@@ -1,4 +1,4 @@
-import { RETRY_OPTIONS } from './constants.js';
+import { RETRY_OPTIONS } from '../config/constants.js';
 import {
     dbCreateOrGetUser,
     dbUpdateUserName,
@@ -10,7 +10,7 @@ import {
     dbCreateBooking,
     dbUpdateBookingState,
     dbGetUserEmail
-} from './database-utils.js';
+} from '../database/database-utils.js';
 
 /**
  * Generic retry function with exponential backoff

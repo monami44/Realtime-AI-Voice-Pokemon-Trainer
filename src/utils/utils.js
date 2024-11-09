@@ -1,6 +1,6 @@
 import * as chrono from 'chrono-node';
-import { finalizeConversation } from './finalize-conversation.js';
-import { updateConversationWithRetry } from './retry.js';
+import { finalizeConversation } from '../utils/finalize-conversation.js';
+import { updateConversationWithRetry } from '../utils/retry.js';
 
 /**
  * Email-related utility functions

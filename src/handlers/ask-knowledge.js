@@ -1,4 +1,4 @@
-import { supabase } from './supabase-client.js';
+import { supabase } from '../config/supabase-client.js';
 
 /**
  * Queries the knowledge base using OpenAI embeddings and Supabase vector search

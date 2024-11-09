@@ -1,7 +1,7 @@
 import { google } from 'googleapis';
 import { v4 as uuidv4 } from 'uuid';
-import { VOICE } from './constants.js';
-import { updateBookingStateWithRetry, createBookingWithRetry, updateUserEmailWithRetry } from './retry.js';
+import { VOICE } from '../../config/constants.js';
+import { updateBookingStateWithRetry, createBookingWithRetry, updateUserEmailWithRetry } from '../../utils/retry.js';
 
 // Initialize Google OAuth2 Client
 const oauth2Client = new google.auth.OAuth2(

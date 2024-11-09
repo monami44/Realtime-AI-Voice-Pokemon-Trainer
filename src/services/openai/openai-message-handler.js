@@ -1,5 +1,5 @@
-import { VOICE, LOG_EVENT_TYPES } from './constants.js';
-import { askSupabaseAssistant } from './ask-knowledge.js';
+import { VOICE, LOG_EVENT_TYPES } from '../../config/constants.js';
+import { askSupabaseAssistant } from '../../handlers/ask-knowledge.js';
 import { 
     askForSuitableTime,
     handleEmailConfirmation,
@@ -7,7 +7,7 @@ import {
     askForEmail,
     bookTrainingSession,
     confirmEmail
-} from './booking.js';
+} from '../google/booking.js';
 import { 
     parseUserTime,
     isAffirmative,
@@ -17,16 +17,16 @@ import {
     reconstructEmail,
     validateEmail,
     spellOutEmail
-} from './utils.js';
-import { process_investment_confirmation } from './investment-handling.js';
-import { updateBookingStateWithRetry } from './retry.js';
-import { handleIncomingCall } from './first-message.js';
-import { sendSessionUpdate } from './session-update.js';
+} from '../../utils/utils.js';
+import { process_investment_confirmation } from '../../handlers/investment-handling.js';
+import { updateBookingStateWithRetry } from '../../utils/retry.js';
+import { handleIncomingCall } from '../../handlers/first-message.js';
+import { sendSessionUpdate } from '../../utils/session-update.js';
 import { 
     getRelevantLongTermMemory,
-} from './long-term-memory.js';
-import { redirectToFundraisingExpert } from './investment-handling.js';
-import { retrieveUserEmail } from './finalize-conversation.js';
+} from '../../database/long-term-memory.js';
+import { redirectToFundraisingExpert } from '../../handlers/investment-handling.js';
+import { retrieveUserEmail } from '../../utils/finalize-conversation.js';
 
 export async function handleOpenAiMessage(openAiWs, data, connection, streamSid) {
     try {

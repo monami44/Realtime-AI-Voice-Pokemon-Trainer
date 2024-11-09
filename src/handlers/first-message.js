@@ -2,13 +2,13 @@ import {
     createOrGetUserWithRetry, 
     createConversationWithRetry, 
     getLastConversationWithRetry 
-} from './retry.js';
-import { summarizeLastTopic } from './utils.js';
+} from '../utils/retry.js';
+import { summarizeLastTopic } from '../utils/utils.js';
 import { 
     VOICE, 
     RETURNING_USER_MESSAGE_TEMPLATE, 
     NEW_USER_PROMPT 
-} from './constants.js';
+} from '../config/constants.js';
 import twilio from 'twilio';
 
 // Initialize Twilio client

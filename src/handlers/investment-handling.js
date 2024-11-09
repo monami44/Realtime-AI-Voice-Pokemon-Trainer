@@ -1,6 +1,6 @@
-import { twilioClient, VoiceResponse } from './twilio-client.js';
-import { isAffirmative } from './utils.js';
-import { updateBookingStateWithRetry } from './retry.js';
+import { twilioClient, VoiceResponse } from '../services/twilio/twilio-client.js';
+import { isAffirmative } from '../utils/utils.js';
+import { updateBookingStateWithRetry } from '../utils/retry.js';
 
 
 export async function redirectToFundraisingExpert(callSid) {

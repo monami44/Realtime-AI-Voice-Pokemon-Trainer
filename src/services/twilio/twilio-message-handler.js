@@ -1,4 +1,4 @@
-import { finalizeConversation } from './finalize-conversation.js';
+import { finalizeConversation } from '../../utils/finalize-conversation.js';
 import WebSocket from "ws";
 
 export function handleTwilioMessage(message, openAiWs, setStreamSid, setCallSid) {

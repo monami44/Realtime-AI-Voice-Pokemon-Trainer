@@ -1,4 +1,4 @@
-import { supabase } from './supabase-client.js';
+import { supabase } from '../config/supabase-client.js';
 import { 
     updateUserNameWithRetry,
     updateUserEmailWithRetry,
@@ -7,11 +7,11 @@ import {
 } from './retry.js';
 import { 
     extractEmailFromSummary 
-} from './database-utils.js';
+} from '../database/database-utils.js';
 import { 
     storeLongTermMemory,
     extractRelevantInfo 
-} from './long-term-memory.js';
+} from '../database/long-term-memory.js';
 
 // Function to update user name if not already set
 export async function updateUserName(phoneNumber, name) {

@@ -1,4 +1,4 @@
-import { VOICE, SYSTEM_MESSAGE } from './constants.js';
+import { VOICE, SYSTEM_MESSAGE } from '../config/constants.js';
 
 export function sendSessionUpdate(ws) {
     const sessionUpdate = {

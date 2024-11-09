@@ -1,10 +1,10 @@
 import fastify from "fastify";
 import fastifyWebsocket from "@fastify/websocket";
-import { initializeOpenAiWebSocket } from './websocket-init.js';
-import { handleOpenAiMessage } from './openai-message-handler.js';
-import { handleTwilioMessage } from './twilio-message-handler.js';
-import { sendSessionUpdate } from './session-update.js';
-import { handleCallStatus } from './investment-handling.js';
+import { initializeOpenAiWebSocket } from '../services/openai/websocket-init.js';
+import { handleOpenAiMessage } from '../services/openai/openai-message-handler.js';
+import { handleTwilioMessage } from '../services/twilio/twilio-message-handler.js';
+import { sendSessionUpdate } from '../utils/session-update.js';
+import { handleCallStatus } from '../handlers/investment-handling.js';
 import WebSocket from "ws";
 
 export function setupServer() {

@@ -1,6 +1,6 @@
 // database-utils.js
 
-import { supabase } from './supabase-client.js';
+import { supabase } from '../config/supabase-client.js';
 
 // User Operations
 export async function dbCreateOrGetUser(phoneNumber) {

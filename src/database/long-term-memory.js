@@ -1,5 +1,5 @@
-import { generateEmbedding } from './utils.js';
-import { supabase } from './supabase-client.js';
+import { generateEmbedding } from '../utils/utils.js';
+import { supabase } from '../config/supabase-client.js';
 import fetch from 'node-fetch';
 import dotenv from "dotenv";
 import path from 'path';
@@ -8,7 +8,7 @@ import { fileURLToPath } from 'url';
 // Set up environment
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
-dotenv.config({ path: path.resolve(__dirname, '.env') });
+dotenv.config({ path: path.resolve(__dirname, '../../.env') });
 
 /**
  * Retrieves relevant memories based on query and phone number

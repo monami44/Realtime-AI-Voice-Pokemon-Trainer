@@ -1,5 +1,5 @@
 import WebSocket from "ws";
-import { setupWebSocketErrorHandling } from './utils.js';
+import { setupWebSocketErrorHandling } from '../../utils/utils.js';
 
 export function initializeOpenAiWebSocket() {
     const ws = new WebSocket(
