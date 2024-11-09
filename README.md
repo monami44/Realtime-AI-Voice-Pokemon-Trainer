@@ -26,16 +26,8 @@ A sophisticated AI assistant system featuring booking management, investment han
   - [Booking Endpoints](#booking-endpoints)
   - [Investment Endpoints](#investment-endpoints)
 - [Development](#development)
-  - [Local Development](#local-development)
-  - [Database Migrations](#database-migrations)
-- [Monitoring and Logging](#monitoring-and-logging)
-  - [Log Levels](#log-levels)
-- [Security Considerations](#security-considerations)
 - [Contributing](#contributing)
-- [License](#license)
-- [Support](#support)
-- [Acknowledgments](#acknowledgments)
-- [SQL Scripts](#sql-scripts)
+
 
 ## Overview
 
