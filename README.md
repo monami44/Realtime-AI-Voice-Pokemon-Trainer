@@ -28,9 +28,6 @@ A sophisticated AI assistant system featuring booking management, investment han
 - [Development](#development)
   - [Local Development](#local-development)
   - [Database Migrations](#database-migrations)
-- [Deployment](#deployment)
-  - [Production Deployment](#production-deployment)
-  - [Docker Deployment](#docker-deployment)
 - [Monitoring and Logging](#monitoring-and-logging)
   - [Log Levels](#log-levels)
 - [Security Considerations](#security-considerations)
@@ -38,6 +35,7 @@ A sophisticated AI assistant system featuring booking management, investment han
 - [License](#license)
 - [Support](#support)
 - [Acknowledgments](#acknowledgments)
+- [SQL Scripts](#sql-scripts)
 
 ## Overview
 
@@ -69,6 +67,10 @@ graph LR
 4. **OpenAI Realtime API:** The Fastify server forwards the audio data to the OpenAI Realtime API for processing, enabling real-time AI-driven responses.
 
 This basic flow ensures that audio interactions from users are efficiently captured, processed, and responded to using AI capabilities.
+
+### Reference Video
+
+For a comprehensive walkthrough of the basic setup and connection process, refer to this [Twilio YouTube video](https://youtu.be/csoe8Gc4_RQ?si=FA2Q8BC7yeEjeegj). This video provides a step-by-step guide to getting the entire system up and running.
 
 ### Knowledge Base Flow
 
@@ -818,6 +820,7 @@ Ensure that you have the `pgvector` extension installed in your PostgreSQL datab
 - **Azure OpenAI** API access
 - **Twilio** account
 - **Google Calendar** API credentials
+- **ngrok** installed for tunneling (optional but recommended for local development)
 
 ### Installation Steps
 
@@ -845,6 +848,24 @@ Ensure that you have the `pgvector` extension installed in your PostgreSQL datab
     ```bash
     npm run db:init
     ```
+
+5. **Run the application**
+
+    The application is configured to run on port `5050`. Start the server using:
+
+    ```bash
+    node index.js
+    ```
+
+6. **Set up ngrok**
+
+    To expose your local server to the internet, especially for Twilio webhooks, set up ngrok:
+
+    ```bash
+    ngrok http 5050
+    ```
+
+    This command will provide a public URL that forwards to your local server on port `5050`. Update your Twilio webhook URLs with the provided ngrok URL to ensure proper communication between Twilio and your application.
 
 ## Environment Variables
 
@@ -967,36 +988,6 @@ Content-Type: application/json
     npm run migration:up
     ```
 
-## Deployment
-
-### Production Deployment
-
-1. **Build the application**
-
-    ```bash
-    npm run build
-    ```
-
-2. **Start the production server**
-
-    ```bash
-    npm start
-    ```
-
-### Docker Deployment
-
-1. **Build the Docker image**
-
-    ```bash
-    docker build -t ai-assistant .
-    ```
-
-2. **Run the container**
-
-    ```bash
-    docker run -p 3000:3000 ai-assistant
-    ```
-
 ## Monitoring and Logging
 
 The system implements comprehensive logging:
@@ -1039,21 +1030,6 @@ The system implements comprehensive logging:
 - Ensure all tests pass
 - Provide documentation for new features
 
-## License
-
-This project is licensed under the MIT License - see the [LICENSE.md](LICENSE.md) file for details.
-
-## Support
-
-For support, email [support@example.com](mailto:support@example.com) or join our Slack channel.
-
-## Acknowledgments
-
-- **OpenAI:** For their API and AI services
-- **Twilio:** For voice capabilities
-- **Supabase:** For database solutions
-- **Azure:** For additional AI capabilities
-- **Google:** For Google Calendar API integration
 
 ## SQL Scripts
 
