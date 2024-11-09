@@ -11,6 +11,8 @@ A sophisticated AI assistant system featuring booking management, investment han
   - [Investment Handling](#investment-handling)
   - [Long-Term Memory System](#long-term-memory-system)
   - [Database Operations](#database-operations)
+- [Knowledge Base](#knowledge-base)
+- [Data Collection Logic](#data-collection-logic)
 - [Setup and Installation](#setup-and-installation)
 - [Environment Variables](#environment-variables)
 - [API Documentation](#api-documentation)
@@ -26,33 +28,33 @@ A sophisticated AI assistant system featuring booking management, investment han
 ## Overview
 
 The AI Assistant System is a comprehensive solution that provides:
-- Automated booking management with Google Calendar integration
-- Investment inquiry handling with expert redirection
-- Long-term memory for personalized user interactions
-- Robust database operations for data persistence
+- **Automated booking management** with Google Calendar integration.
+- **Investment inquiry handling** with expert redirection.
+- **Long-term memory** for personalized user interactions.
+- **Robust database operations** for data persistence.
 
 ## Features
 
 - **Intelligent Conversation**
-  - Natural language processing
-  - Context-aware responses
-  - Multi-modal interaction (text/voice)
+  - Natural language processing.
+  - Context-aware responses.
+  - Multi-modal interaction (text/voice).
 
 - **Booking Management**
-  - Automated scheduling
-  - Email confirmation
-  - Google Calendar integration
-  - State management
+  - Automated scheduling.
+  - Email confirmation.
+  - Google Calendar integration.
+  - State management.
 
 - **Investment Handling**
-  - Expert redirection
-  - Call management
-  - State tracking
+  - Expert redirection.
+  - Call management.
+  - State tracking.
 
 - **Long-Term Memory**
-  - Vector embeddings
-  - Semantic search
-  - Persistent user information
+  - Vector embeddings.
+  - Semantic search.
+  - Persistent user information.
 
 ## System Architecture
 
@@ -69,6 +71,15 @@ flowchart TD
     E -->|Update| G
     F -->|Persist| G
 ```
+
+**Explanation:**
+- **User Interface:** The entry point where users interact with the system via text or voice.
+- **OpenAI Handler:** Handles the processing of user inputs using OpenAI's APIs.
+- **Router:** Directs the flow to appropriate components based on user intent (Booking, Investment, Memory).
+- **Booking System:** Manages scheduling and booking operations.
+- **Investment Handler:** Manages investment-related inquiries and redirects.
+- **Long-Term Memory:** Handles persistent storage and retrieval of user information.
+- **Database:** Central storage system where all data is persisted.
 
 ### Database Schema
 
@@ -116,11 +127,30 @@ flowchart TD
     B -->|Check email history| D[Database]
     
     subgraph Email Handling
+        direction TB
         D -->|Has stored email| E[System]
         E -->|Confirm stored email| F[User]
         F -->|Confirm email| G[System]
         G -->|Create calendar event| H[Google Calendar]
         H -->|Store booking| D
+        D -->|Booking confirmed| I[User]
+        
+        D -->|No stored email| J[System]
+        J -->|Request email| K[User]
+        K -->|Provide email| J
+        J -->|Validate email| L[System]
+        
+        subgraph Email Confirmation
+            direction TB
+            L -->|Valid email| M[User]
+            M -->|Confirm spelling| N[System]
+            N -->|Create calendar event| H
+            H -->|Store booking| D
+            D -->|Booking confirmed| I
+            
+            L -->|Invalid email| O[User]
+            O -->|Request again| J
+        end
     end
 ```
 
@@ -147,23 +177,6 @@ export async function askForSuitableTime(openAiWs) {
 ### Investment Handling
 
 The investment handling system manages investor inquiries and expert redirection.
-
-```mermaid
-flowchart TD
-    subgraph Initial Investment Query
-        A[User] -->|Mentions investment| B[OpenAI Handler]
-        B -->|Triggers handle_investment_query| C[Investment Handler]
-        C -->|Sets state| D[awaiting_investment_confirmation]
-    end
-
-    subgraph Redirect Process
-        D -->|User confirms| E[Generate TwiML]
-        E -->|Configure| F[Set up dial parameters]
-        F -->|Update call| G[Twilio update call]
-    end
-```
-
-#### Implementation Details
 
 ```javascript
 export async function redirectToFundraisingExpert(callSid) {
@@ -197,30 +210,6 @@ export async function redirectToFundraisingExpert(callSid) {
 ```
 
 ### Long-Term Memory System
-
-The long-term memory system provides persistent storage and retrieval of user information using vector embeddings.
-
-```mermaid
-flowchart TD
-    subgraph Memory Storage Flow
-        A[Conversation End] -->|Full Dialogue| B[extractRelevantInfo]
-        B -->|Process Text| C{Extract Fields}
-        C -->|Allowed Fields| D[Format JSON]
-        D -->|Structured Data| E[storeLongTermMemory]
-        
-        E -->|Generate Embedding| F[OpenAI Embedding API]
-        F -->|Vector| G[Store in Database]
-    end
-
-    subgraph Memory Retrieval Flow
-        H[User Query] -->|Query Text| I[getRelevantLongTermMemory]
-        I -->|Generate Query Embedding| J[OpenAI Embedding API]
-        J -->|Query Vector| K[Vector Similarity Search]
-        K -->|Match Results| L[Return Memories]
-    end
-```
-
-#### Implementation Details
 
 ```javascript
 export async function getRelevantLongTermMemory(phoneNumber, query) {
@@ -257,65 +246,39 @@ export async function getRelevantLongTermMemory(phoneNumber, query) {
 }
 ```
 
-### State Management
-
-The system implements a robust state management system across all components:
-
-```mermaid
-stateDiagram-v2
-    [*] --> idle
-    idle --> awaiting_time: Book Request
-    idle --> awaiting_investment_confirmation: Investment Query
-    awaiting_time --> awaiting_email: Time Confirmed
-    awaiting_email --> idle: Booking Complete
-    awaiting_investment_confirmation --> idle: Redirect Complete
-```
-
-### Error Handling
-
-```mermaid
-flowchart LR
-    A[Operation] -->|Execute| B{Success?}
-    B -->|Yes| C[Return Result]
-    B -->|No| D{Error Type}
-    D -->|Validation| E[Return null]
-    D -->|Database| F[Log & Retry]
-    D -->|API| G[Fallback Response]
-```
-
 ## Setup and Installation
 
 ### Prerequisites
-- Node.js (v16 or higher)
-- PostgreSQL with Vector extension
-- Supabase account
-- OpenAI API access
-- Azure OpenAI API access
-- Twilio account
-- Google Calendar API credentials
+- **Node.js** (v16 or higher)
+- **PostgreSQL** with Vector extension
+- **Supabase** account
+- **OpenAI** API access
+- **Azure OpenAI** API access
+- **Twilio** account
+- **Google Calendar** API credentials
 
 ### Installation Steps
 
-1. Clone the repository
-```bash
-git clone <repository-url>
-cd ai-assistant-system
-```
+1. **Clone the repository**
+    ```bash
+    git clone <repository-url>
+    cd ai-assistant-system
+    ```
 
-2. Install dependencies
-```bash
-npm install
-```
+2. **Install dependencies**
+    ```bash
+    npm install
+    ```
 
-3. Set up environment variables
-```bash
-cp .env.example .env
-```
+3. **Set up environment variables**
+    ```bash
+    cp .env.example .env
+    ```
 
-4. Initialize the database
-```bash
-npm run db:init
-```
+4. **Initialize the database**
+    ```bash
+    npm run db:init
+    ```
 
 ## Environment Variables
 
@@ -351,6 +314,7 @@ VOICE=your_preferred_voice
 ### Conversation Endpoints
 
 #### Start Conversation
+
 ```http
 POST /api/conversation/start
 Content-Type: application/json
@@ -362,6 +326,7 @@ Content-Type: application/json
 ```
 
 #### End Conversation
+
 ```http
 POST /api/conversation/end
 Content-Type: application/json
@@ -373,7 +338,6 @@ Content-Type: application/json
 
 ### Booking Endpoints
 
-#### Create Booking
 ```http
 POST /api/booking/create
 Content-Type: application/json
@@ -385,85 +349,59 @@ Content-Type: application/json
 }
 ```
 
-### Investment Endpoints
-
-#### Handle Investment Query
-```http
-POST /api/investment/handle
-Content-Type: application/json
-
-{
-    "conversation_id": "string",
-    "call_sid": "string"
-}
-```
-
 ## Development
 
 ### Local Development
 
-1. Start the development server
-```bash
-npm run dev
-```
+1. **Start the development server**
+    ```bash
+    npm run dev
+    ```
 
-2. Run tests
-```bash
-npm test
-```
+2. **Run tests**
+    ```bash
+    npm test
+    ```
 
-3. Lint code
-```bash
-npm run lint
-```
-
-### Database Migrations
-
-1. Create a new migration
-```bash
-npm run migration:create
-```
-
-2. Run migrations
-```bash
-npm run migration:up
-```
+3. **Lint code**
+    ```bash
+    npm run lint
+    ```
 
 ## Deployment
 
 ### Production Deployment
 
-1. Build the application
-```bash
-npm run build
-```
+1. **Build the application**
+    ```bash
+    npm run build
+    ```
 
-2. Start the production server
-```bash
-npm start
-```
+2. **Start the production server**
+    ```bash
+    npm start
+    ```
 
 ### Docker Deployment
 
-1. Build the Docker image
-```bash
-docker build -t ai-assistant .
-```
+1. **Build the Docker image**
+    ```bash
+    docker build -t ai-assistant .
+    ```
 
-2. Run the container
-```bash
-docker run -p 3000:3000 ai-assistant
-```
+2. **Run the container**
+    ```bash
+    docker run -p 3000:3000 ai-assistant
+    ```
 
 ## Monitoring and Logging
 
-The system implements comprehensive logging:
-
-- Application logs via Winston
-- Error tracking via Sentry
-- Performance monitoring via New Relic
+- **Application Logs:** Managed via Winston for structured logging.
+- **Error Tracking:** Integrated with Sentry for real-time error monitoring.
+- **Performance Monitoring:** Utilizes New Relic to monitor application performance.
 
 ### Log Levels
+
 ```javascript
 {
   error: 0,
@@ -475,31 +413,38 @@ The system implements comprehensive logging:
 
 ## Security Considerations
 
-- All API endpoints are authenticated
-- Rate limiting is implemented
-- Input validation on all endpoints
-- Secure storage of sensitive information
-- Regular security audits
+- **Authenticated Endpoints:** All API endpoints require proper authentication.
+- **Rate Limiting:** Implemented to prevent abuse and ensure fair usage.
+- **Input Validation:** Ensures all inputs are sanitized and validated.
+- **Secure Storage:** Sensitive information is stored securely with encryption.
+- **Regular Audits:** Conducted to identify and mitigate security risks.
 
 ## Contributing
 
-1. Fork the repository
-2. Create a feature branch
-3. Commit changes
-4. Push to the branch
-5. Create a Pull Request
+1. **Fork the repository**
+2. **Create a feature branch**
+3. **Commit changes**
+4. **Push to the branch**
+5. **Create a Pull Request**
+
+**Guidelines:**
+- Follow the coding standards
+- Write clear commit messages
+- Ensure all tests pass
+- Provide documentation for new features
 
 ## License
 
-This project is licensed under the MIT License - see the LICENSE.md file for details.
+This project is licensed under the MIT License - see the [LICENSE.md](LICENSE.md) file for details.
 
 ## Support
 
-For support, email support@example.com or join our Slack channel.
+For support, email [support@example.com](mailto:support@example.com) or join our Slack channel.
 
 ## Acknowledgments
 
-- OpenAI for their API
-- Twilio for voice capabilities
-- Supabase for database solutions
-- Azure for additional AI capabilities
+- **OpenAI:** For their API and AI services
+- **Twilio:** For voice capabilities
+- **Supabase:** For database solutions
+- **Azure:** For additional AI capabilities
+- **Google:** For Google Calendar API integration
