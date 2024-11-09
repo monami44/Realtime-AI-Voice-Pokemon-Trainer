@@ -952,69 +952,6 @@ Content-Type: application/json
 }
 ```
 
-## Development
-
-### Local Development
-
-1. **Start the development server**
-
-    ```bash
-    npm run dev
-    ```
-
-2. **Run tests**
-
-    ```bash
-    npm test
-    ```
-
-3. **Lint code**
-
-    ```bash
-    npm run lint
-    ```
-
-### Database Migrations
-
-1. **Create a new migration**
-
-    ```bash
-    npm run migration:create
-    ```
-
-2. **Run migrations**
-
-    ```bash
-    npm run migration:up
-    ```
-
-## Monitoring and Logging
-
-The system implements comprehensive logging:
-
-- **Application Logs:** Managed via Winston for structured logging.
-- **Error Tracking:** Integrated with Sentry for real-time error monitoring.
-- **Performance Monitoring:** Utilizes New Relic to monitor application performance.
-
-### Log Levels
-
-```javascript
-{
-  error: 0,
-  warn: 1,
-  info: 2,
-  debug: 3
-}
-```
-
-## Security Considerations
-
-- **Authenticated Endpoints:** All API endpoints require proper authentication.
-- **Rate Limiting:** Implemented to prevent abuse and ensure fair usage.
-- **Input Validation:** Ensures all inputs are sanitized and validated.
-- **Secure Storage:** Sensitive information is stored securely with encryption.
-- **Regular Audits:** Conducted to identify and mitigate security risks.
-
 ## Contributing
 
 1. **Fork the repository**
